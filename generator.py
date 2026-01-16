@@ -35,7 +35,7 @@ try:
         "pillow",
         "torch",
         "sentencepiece",
-        "chatterbox",  # Multilingual TTS
+        "chatterbox-tts",  # Multilingual TTS
         "--quiet"
     ]
     subprocess.check_call([sys.executable, "-m", "pip", "install"] + libs)
