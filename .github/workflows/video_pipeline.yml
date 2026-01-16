@@ -136,7 +136,7 @@ jobs:
         run: |
           echo "Polling Kaggle (Timeout: 6 Hours)..."
           for i in {1..360}; do
-            OUTPUT=$(kaggle kernels status ${{ secrets.KAGGLE_USERNAME }}/video-factory-titan)
+            OUTPUT=$(kaggle kernels status ${{ secrets.KAGGLE_USERNAME }}/video-factory-titan-spanish)
             echo "$OUTPUT"
             
             if [[ "$OUTPUT" == *"complete"* ]]; then
@@ -154,7 +154,7 @@ jobs:
       - name: Download Output
         continue-on-error: true
         run: |
-          kaggle kernels output ${{ secrets.KAGGLE_USERNAME }}/video-factory-titan -p ./output
+          kaggle kernels output ${{ secrets.KAGGLE_USERNAME }}/video-factory-titan-spanish -p ./output
           mkdir public_video
           mv ./output/final_video_*.mp4 ./public_video/ || echo "Video likely uploaded to Google Drive directly."
 
