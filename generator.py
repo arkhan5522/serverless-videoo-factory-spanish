@@ -1,9 +1,10 @@
 """
 AI VIDEO GENERATOR - SPANISH VERSION (FIXED)
 ============================================
-✅ Chatterbox Multilingual TTS for Spanish audio
+✅ Chatterbox Multilingual TTS for Spanish audio (language_id="es")
 ✅ Helsinki-NLP translation model for live Spanish->English queries
 ✅ No hardcoded dictionaries - all live AI translation
+✅ Proper error handling and installation
 """
 
 import os
@@ -16,8 +17,6 @@ import shutil
 import json
 import concurrent.futures
 import requests
-import torch
-import torchaudio as ta
 from pathlib import Path
 
 # ========================================== 
@@ -27,25 +26,43 @@ from pathlib import Path
 print("--- 🔧 Installing Dependencies ---")
 try:
     libs = [
+        "torch",
         "torchaudio", 
         "google-generativeai",
         "requests",
         "numpy",
         "transformers",
         "pillow",
-        "torch",
         "sentencepiece",
-        "chatterbox-tts",  # Multilingual TTS
-        "--quiet"
+        "chatterbox-tts"
     ]
-    subprocess.check_call([sys.executable, "-m", "pip", "install"] + libs)
-    subprocess.run("apt-get update -qq && apt-get install -qq -y ffmpeg", shell=True)
+    
+    for lib in libs:
+        try:
+            subprocess.check_call([sys.executable, "-m", "pip", "install", lib, "--quiet"])
+            print(f"✅ {lib}")
+        except Exception as e:
+            print(f"⚠️  {lib}: {str(e)[:50]}")
+    
+    subprocess.run("apt-get update -qq && apt-get install -qq -y ffmpeg", shell=True, check=False)
 except Exception as e:
     print(f"Install Warning: {e}")
 
+import torch
+import torchaudio as ta
 import google.generativeai as genai
 from transformers import MarianMTModel, MarianTokenizer
-from chatterbox.mtl_tts import ChatterboxMultilingualTTS
+
+# Import Chatterbox
+TTS_MODEL = None
+TTS_AVAILABLE = False
+try:
+    from chatterbox.mtl_tts import ChatterboxMultilingualTTS
+    TTS_AVAILABLE = True
+    print("✅ Chatterbox Multilingual TTS imported successfully")
+except ImportError as e:
+    print(f"⚠️ Chatterbox import failed: {e}")
+    print("Will use fallback TTS")
 
 # ========================================== 
 # 2. CONFIGURATION
@@ -79,19 +96,16 @@ TEMP_DIR.mkdir(exist_ok=True)
 
 print("--- 🤖 Loading AI Models ---")
 
-# Chatterbox Multilingual TTS
-print("Loading Chatterbox Multilingual TTS...")
-TTS_MODEL = None
-TTS_AVAILABLE = False
-try:
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    print(f"Using device: {device}")
-    TTS_MODEL = ChatterboxMultilingualTTS.from_pretrained(device=device)
-    TTS_AVAILABLE = True
-    print("✅ Chatterbox TTS loaded successfully")
-except Exception as e:
-    print(f"⚠️ Chatterbox TTS failed: {e}")
-    print("Will use silent audio fallback")
+# Load Chatterbox Multilingual TTS
+if TTS_AVAILABLE:
+    try:
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        print(f"Loading Chatterbox on {device}...")
+        TTS_MODEL = ChatterboxMultilingualTTS.from_pretrained(device=device)
+        print("✅ Chatterbox Multilingual TTS loaded successfully")
+    except Exception as e:
+        print(f"⚠️ Chatterbox loading failed: {e}")
+        TTS_AVAILABLE = False
 
 # Translation Model (Spanish -> English)
 print("Loading Spanish->English Translation Model...")
@@ -106,7 +120,6 @@ try:
     print("✅ Translation Model loaded (Helsinki-NLP opus-mt-es-en)")
 except Exception as e:
     print(f"⚠️ Translation Model failed: {e}")
-    TRANSLATOR_AVAILABLE = False
 
 # ========================================== 
 # 4. CONTENT FILTERS
@@ -154,19 +167,14 @@ def is_content_appropriate(text):
 # ========================================== 
 
 def translate_spanish_to_english(spanish_text):
-    """
-    Live translation using Helsinki-NLP model
-    NO hardcoded dictionaries - pure AI translation
-    """
+    """Live translation using Helsinki-NLP model"""
     if not TRANSLATOR_AVAILABLE:
         print("    ⚠️ Translator not available")
         return "cinematic background"
     
     try:
-        # Prepare text (limit to 512 tokens for efficiency)
         text = spanish_text.strip()[:500]
         
-        # Tokenize
         inputs = TRANSLATOR_TOKENIZER(
             text, 
             return_tensors="pt", 
@@ -175,7 +183,6 @@ def translate_spanish_to_english(spanish_text):
             max_length=512
         )
         
-        # Translate
         translated_tokens = TRANSLATOR.generate(
             **inputs,
             max_length=100,
@@ -183,7 +190,6 @@ def translate_spanish_to_english(spanish_text):
             early_stopping=True
         )
         
-        # Decode
         english_text = TRANSLATOR_TOKENIZER.decode(
             translated_tokens[0], 
             skip_special_tokens=True
@@ -197,34 +203,24 @@ def translate_spanish_to_english(spanish_text):
         
     except Exception as e:
         print(f"    ⚠️ Translation error: {e}")
-        # Extract any words as fallback
         words = re.findall(r'\b\w{4,}\b', spanish_text)
         return words[0] if words else "background"
 
 def generate_search_query_from_spanish(spanish_text):
-    """
-    Generate English search query from Spanish text
-    1. Translate Spanish -> English using AI model
-    2. Extract key terms
-    3. Add search modifiers
-    """
-    # Step 1: Live AI translation
+    """Generate English search query from Spanish text"""
     english_text = translate_spanish_to_english(spanish_text)
     
     if not english_text or len(english_text) < 3:
         return "cinematic 4k"
     
-    # Step 2: Extract main keywords (first 2-3 significant words)
     words = re.findall(r'\b\w{4,}\b', english_text.lower())
     keywords = [w for w in words if w not in ['this', 'that', 'with', 'from', 'have', 'been', 'were', 'will']][:2]
     
     if not keywords:
         return "background cinematic"
     
-    # Step 3: Build search query
     query = " ".join(keywords) + " cinematic 4k"
     
-    # Verify content appropriateness
     if not is_content_appropriate(query):
         print(f"      ⚠️ Query filtered, using generic")
         return "nature cinematic"
@@ -308,7 +304,6 @@ def download_asset(path, local):
     except:
         pass
     
-    # Try alternative paths
     alt_paths = [
         f"static/{path}",
         f"uploads/{path}",
@@ -384,16 +379,16 @@ def call_gemini(prompt):
 # 8. CHATTERBOX TTS AUDIO GENERATION
 # ========================================== 
 
-def generate_tts_audio_chatterbox(sentences, output_path):
+def generate_tts_audio_chatterbox(sentences, output_path, audio_prompt_path=None):
     """
     Generate Spanish TTS audio using Chatterbox Multilingual TTS
-    Language ID: 'es' for Spanish
+    Uses language_id="es" for Spanish as per documentation
     """
-    if not TTS_AVAILABLE:
+    if not TTS_AVAILABLE or TTS_MODEL is None:
         print("⚠️ Chatterbox TTS not available, creating silent audio")
         return create_silent_audio(sentences, output_path)
     
-    print("🎙️ Generating Spanish Audio with Chatterbox TTS...")
+    print("🎙️ Generating Spanish Audio with Chatterbox TTS (language_id='es')...")
     
     try:
         all_audio_segments = []
@@ -401,8 +396,16 @@ def generate_tts_audio_chatterbox(sentences, output_path):
         for i, sent in enumerate(sentences):
             text = sent['text'].strip()
             
-            # Generate Spanish audio using Chatterbox
-            wav_audio = TTS_MODEL.generate(text, language_id="es")
+            # Generate Spanish audio using Chatterbox with language_id="es"
+            # Optional: can pass audio_prompt_path for voice cloning
+            if audio_prompt_path and os.path.exists(audio_prompt_path):
+                wav_audio = TTS_MODEL.generate(
+                    text, 
+                    language_id="es",
+                    audio_prompt_path=audio_prompt_path
+                )
+            else:
+                wav_audio = TTS_MODEL.generate(text, language_id="es")
             
             # Get sample rate from model
             sample_rate = TTS_MODEL.sr
@@ -411,15 +414,21 @@ def generate_tts_audio_chatterbox(sentences, output_path):
             target_duration = sent['end'] - sent['start']
             current_duration = wav_audio.shape[-1] / sample_rate
             
-            # Adjust speed to match target duration
+            # Adjust speed to match target duration if needed
             if current_duration > 0 and abs(current_duration - target_duration) > 0.5:
                 speed_factor = current_duration / target_duration
                 
-                # Resample to adjust playback speed
                 if speed_factor != 1.0:
                     new_length = int(wav_audio.shape[-1] / speed_factor)
+                    
+                    # Handle tensor dimensions properly
+                    if wav_audio.dim() == 1:
+                        wav_audio = wav_audio.unsqueeze(0).unsqueeze(0)
+                    elif wav_audio.dim() == 2:
+                        wav_audio = wav_audio.unsqueeze(0)
+                    
                     wav_audio = torch.nn.functional.interpolate(
-                        wav_audio.unsqueeze(0) if wav_audio.dim() == 1 else wav_audio.unsqueeze(0).unsqueeze(0),
+                        wav_audio,
                         size=new_length,
                         mode='linear',
                         align_corners=False
@@ -433,7 +442,7 @@ def generate_tts_audio_chatterbox(sentences, output_path):
         # Concatenate all audio segments
         if all_audio_segments:
             # Ensure all tensors have same dimensions
-            all_audio_segments = [seg.squeeze() for seg in all_audio_segments]
+            all_audio_segments = [seg.squeeze() if seg.dim() > 1 else seg for seg in all_audio_segments]
             full_audio = torch.cat(all_audio_segments, dim=-1)
             
             # Ensure 2D tensor for torchaudio.save (channels, samples)
@@ -445,6 +454,7 @@ def generate_tts_audio_chatterbox(sentences, output_path):
             
             print(f"✅ Chatterbox Spanish TTS audio saved: {output_path}")
             print(f"   Duration: {full_audio.shape[-1] / sample_rate:.1f}s")
+            print(f"   Sample Rate: {sample_rate} Hz")
             return True
         else:
             print("❌ No audio segments generated")
@@ -466,7 +476,7 @@ def create_silent_audio(sentences, output_path):
         wav.setnchannels(1)
         wav.setsampwidth(2)
         wav.setframerate(24000)
-        wav.writeframes(b'\x00' * int(total_duration * 24000))
+        wav.writeframes(b'\x00\x00' * int(total_duration * 24000))
     
     print(f"⚠️ Silent audio created: {total_duration}s")
     return True
@@ -711,10 +721,8 @@ def process_single_clip(args):
         print(f"    Attempt {attempt}")
         
         if attempt == 1:
-            # Live AI translation
             results = search_videos_with_translation(sent['text'], i)
         elif attempt == 2:
-            # Re-translate with different part of text
             alt_text = " ".join(sent['text'].split()[:10])
             results = search_videos_with_translation(alt_text, i)
         elif attempt == 3:
@@ -755,10 +763,6 @@ def process_visuals(sentences, audio_path, ass_file, logo_path, output_no_subs, 
         
         for future in concurrent.futures.as_completed(future_to_index):
             try:
-                # ========================================== 
-# CONTINUATION - VISUAL PROCESSING & MAIN
-# ========================================== 
-
                 index, clip_path = future.result()
                 
                 if clip_path:
@@ -924,7 +928,7 @@ def upload_to_google_drive(file_path):
 
 print("\n" + "="*60)
 print("🎬 SPANISH VIDEO GENERATOR")
-print("✅ Chatterbox Multilingual TTS")
+print("✅ Chatterbox Multilingual TTS (language_id='es')")
 print("✅ Helsinki-NLP Live Translation")
 print("="*60)
 
@@ -934,9 +938,10 @@ try:
     # Download voice reference
     ref_voice = TEMP_DIR / "voice_ref.mp3"
     if not download_asset(VOICE_PATH, ref_voice):
-        raise Exception("Voice download failed")
-    
-    print(f"✅ Voice: {os.path.getsize(ref_voice)} bytes")
+        print("⚠️ Voice download failed, will use default voice")
+        ref_voice = None
+    else:
+        print(f"✅ Voice: {os.path.getsize(ref_voice)} bytes")
     
     # Download logo
     ref_logo = None
@@ -983,9 +988,14 @@ try:
     print(f"📊 Sentences: {len(sentences)}")
     
     # Generate Chatterbox TTS audio
-    update_status(20, "🎙️ Generating Spanish TTS with Chatterbox...")
+    update_status(20, "🎙️ Generating Spanish TTS with Chatterbox (language_id='es')...")
     audio_file = TEMP_DIR / "audio.wav"
-    generate_tts_audio_chatterbox(sentences, audio_file)
+    
+    # Use voice reference if available for voice cloning
+    if ref_voice and os.path.exists(ref_voice):
+        generate_tts_audio_chatterbox(sentences, audio_file, audio_prompt_path=str(ref_voice))
+    else:
+        generate_tts_audio_chatterbox(sentences, audio_file)
     
     if not os.path.exists(audio_file):
         raise Exception("Audio generation failed")
@@ -1015,7 +1025,7 @@ try:
         
         # Final status
         final_msg = "✅ Spanish Video Complete!\n"
-        final_msg += "🎙️ Chatterbox Spanish TTS\n"
+        final_msg += "🎙️ Chatterbox Spanish TTS (language_id='es')\n"
         final_msg += "🌐 AI Translation for videos\n"
         if links.get('no_subs'):
             final_msg += f"📹 No Subs: {links['no_subs']}\n"
