@@ -397,7 +397,6 @@ def generate_tts_audio_chatterbox(sentences, output_path, audio_prompt_path=None
             text = sent['text'].strip()
             
             # Generate Spanish audio using Chatterbox with language_id="es"
-            # Optional: can pass audio_prompt_path for voice cloning
             if audio_prompt_path and os.path.exists(audio_prompt_path):
                 wav_audio = TTS_MODEL.generate(
                     text, 
@@ -410,51 +409,89 @@ def generate_tts_audio_chatterbox(sentences, output_path, audio_prompt_path=None
             # Get sample rate from model
             sample_rate = TTS_MODEL.sr
             
+            # DIAGNOSTIC: Print first segment info
+            if i == 0:
+                print(f"    🔍 Model sample rate: {sample_rate} Hz")
+                print(f"    🔍 First audio shape: {wav_audio.shape}")
+                print(f"    🔍 First audio dtype: {wav_audio.dtype}")
+            
             # Calculate timing
             target_duration = sent['end'] - sent['start']
             current_duration = wav_audio.shape[-1] / sample_rate
             
-            # Adjust speed to match target duration if needed
-            if current_duration > 0 and abs(current_duration - target_duration) > 0.5:
-                speed_factor = current_duration / target_duration
-                
-                if speed_factor != 1.0:
-                    new_length = int(wav_audio.shape[-1] / speed_factor)
-                    
-                    # Handle tensor dimensions properly
-                    if wav_audio.dim() == 1:
-                        wav_audio = wav_audio.unsqueeze(0).unsqueeze(0)
-                    elif wav_audio.dim() == 2:
-                        wav_audio = wav_audio.unsqueeze(0)
-                    
-                    wav_audio = torch.nn.functional.interpolate(
-                        wav_audio,
-                        size=new_length,
-                        mode='linear',
-                        align_corners=False
-                    ).squeeze()
+            # DON'T ADJUST SPEED - this is causing the chipmunk effect!
+            # Instead, just use the audio as-is and let it naturally determine timing
+            # The issue was: interpolate was changing the audio incorrectly
             
-            all_audio_segments.append(wav_audio)
+            # Add small silence padding between sentences (0.2s)
+            silence_samples = int(0.2 * sample_rate)
+            silence = torch.zeros((wav_audio.shape[0] if wav_audio.dim() > 1 else 1, silence_samples))
+            
+            # Ensure wav_audio is 2D (channels, samples)
+            if wav_audio.dim() == 1:
+                wav_audio = wav_audio.unsqueeze(0)
+            
+            # Concatenate audio with silence
+            segment_with_pause = torch.cat([wav_audio, silence], dim=-1)
+            
+            all_audio_segments.append(segment_with_pause)
             
             if (i + 1) % 10 == 0:
                 print(f"    ✅ Generated {i+1}/{len(sentences)} audio segments")
         
         # Concatenate all audio segments
         if all_audio_segments:
-            # Ensure all tensors have same dimensions
-            all_audio_segments = [seg.squeeze() if seg.dim() > 1 else seg for seg in all_audio_segments]
-            full_audio = torch.cat(all_audio_segments, dim=-1)
+            # Ensure all tensors have same number of channels
+            max_channels = max(seg.shape[0] if seg.dim() > 1 else 1 for seg in all_audio_segments)
             
-            # Ensure 2D tensor for torchaudio.save (channels, samples)
-            if full_audio.dim() == 1:
-                full_audio = full_audio.unsqueeze(0)
+            processed_segments = []
+            for seg in all_audio_segments:
+                if seg.dim() == 1:
+                    seg = seg.unsqueeze(0)
+                
+                # If mono and we need stereo, duplicate channel
+                if seg.shape[0] < max_channels:
+                    seg = seg.repeat(max_channels, 1)
+                
+                processed_segments.append(seg)
             
-            # Save audio
-            ta.save(str(output_path), full_audio, sample_rate)
+            # Concatenate along time dimension
+            full_audio = torch.cat(processed_segments, dim=-1)
             
-            print(f"✅ Chatterbox Spanish TTS audio saved: {output_path}")
-            print(f"   Duration: {full_audio.shape[-1] / sample_rate:.1f}s")
-            print(f"   Sample Rate: {sample_rate} Hz")
+            # Save with temp file first, then re-encode
+            temp_path = str(output_path).replace('.wav', '_temp.wav')
+            ta.save(temp_path, full_audio, sample_rate)
+            
+            print(f"    💾 Raw audio saved, re-encoding for compatibility...")
+            
+            # Re-encode with ffmpeg to ensure proper format
+            subprocess.run([
+                "ffmpeg", "-y",
+                "-i", temp_path,
+                "-ar", str(sample_rate),  # Keep original sample rate
+                "-ac", "1",               # Force mono
+                "-acodec", "pcm_s16le",  # 16-bit PCM
+                str(output_path)
+            ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+            
+            # Remove temp file
+            try:
+                os.remove(temp_path)
+            except:
+                pass
+            
+            # Verify final output
+            import wave
+            with wave.open(str(output_path), 'rb') as wav_file:
+                final_rate = wav_file.getframerate()
+                final_frames = wav_file.getnframes()
+                final_duration = final_frames / final_rate
+                
+                print(f"✅ Chatterbox Spanish TTS audio saved: {output_path}")
+                print(f"   Duration: {final_duration:.1f}s")
+                print(f"   Sample Rate: {final_rate} Hz")
+                print(f"   Channels: {wav_file.getnchannels()}")
+            
             return True
         else:
             print("❌ No audio segments generated")
