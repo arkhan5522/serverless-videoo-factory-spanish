@@ -116,8 +116,8 @@ jobs:
 
           # 4. Create Kaggle Metadata
           echo '{
-            "id": "'"$KAGGLE_USERNAME"'/video-factory-titan-spanish",
-            "title": "Video Factory Titan spanish",
+            "id": "'"$KAGGLE_USERNAME"'/video-factory-titan",
+            "title": "Video Factory Titan",
             "code_file": "final_script.py",
             "language": "python",
             "kernel_type": "script",
@@ -136,7 +136,7 @@ jobs:
         run: |
           echo "Polling Kaggle (Timeout: 6 Hours)..."
           for i in {1..360}; do
-            OUTPUT=$(kaggle kernels status ${{ secrets.KAGGLE_USERNAME }}/video-factory-titan-spanish)
+            OUTPUT=$(kaggle kernels status ${{ secrets.KAGGLE_USERNAME }}/video-factory-titan)
             echo "$OUTPUT"
             
             if [[ "$OUTPUT" == *"complete"* ]]; then
