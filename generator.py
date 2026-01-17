@@ -51,15 +51,8 @@ import google.generativeai as genai
 from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
 
 # Import Chatterbox
-TTS_MODEL = None
-TTS_AVAILABLE = False
-try:
-    from chatterbox.mtl_tts import ChatterboxMultilingualTTS
-    TTS_AVAILABLE = True
-    print("✅ Chatterbox Multilingual TTS imported successfully")
-except ImportError as e:
-    print(f"⚠️ Chatterbox import failed: {e}")
-    print("Will use fallback TTS")
+from chatterbox.mtl_tts import ChatterboxMultilingualTTS
+
 
 # ========================================== 
 # 2. CONFIGURATION
