@@ -710,41 +710,109 @@ def process_visuals(sentences, audio_path, ass_file, logo_path, output_no_subs, 
     if not valid_clips:
         return False
     
-    # Concatenate clips
+    # GPU-accelerated concatenation
+    print("⚡ GPU-accelerated video concatenation...")
     with open("list.txt", "w") as f:
         for c in valid_clips:
             f.write(f"file '{c}'\n")
     
-    subprocess.run(
-        "ffmpeg -y -f concat -safe 0 -i list.txt -c:v libx264 visual.mp4",
-        shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-    )
+    # Check for NVIDIA GPU
+    gpu_available = False
+    try:
+        result = subprocess.run(["nvidia-smi"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        gpu_available = (result.returncode == 0)
+    except:
+        pass
+    
+    if gpu_available:
+        # Use NVIDIA hardware acceleration
+        subprocess.run([
+            "ffmpeg", "-y",
+            "-hwaccel", "cuda",
+            "-hwaccel_output_format", "cuda",
+            "-f", "concat",
+            "-safe", "0",
+            "-i", "list.txt",
+            "-c:v", "h264_nvenc",
+            "-preset", "p4",
+            "-tune", "hq",
+            "-rc", "vbr",
+            "-cq", "23",
+            "-b:v", "0",
+            "visual.mp4"
+        ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        print("✅ GPU concatenation complete")
+    else:
+        # Fallback to CPU
+        subprocess.run(
+            "ffmpeg -y -f concat -safe 0 -i list.txt -c:v libx264 visual.mp4",
+            shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+        )
+        print("⚠️ CPU concatenation (no GPU detected)")
     
     if not os.path.exists("visual.mp4"):
         return False
     
     # Create versions
-    print("📹 Creating final videos...")
+    print("📹 Creating final videos with GPU acceleration...")
+    
+    # Check GPU availability
+    gpu_available = False
+    try:
+        result = subprocess.run(["nvidia-smi"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        gpu_available = (result.returncode == 0)
+    except:
+        pass
+    
+    # Set codec based on GPU availability
+    video_codec = "h264_nvenc" if gpu_available else "libx264"
+    codec_msg = "GPU (NVENC)" if gpu_available else "CPU (x264)"
+    print(f"🎬 Using {codec_msg} encoding")
     
     # Version 1: 900p no subs
     if logo_path and os.path.exists(logo_path):
         filter_v1 = "[0:v]scale=1600:900[bg];[1:v]scale=200:-1[logo];[bg][logo]overlay=25:25[v]"
         cmd_v1 = [
-            "ffmpeg", "-y", "-i", "visual.mp4", "-i", str(logo_path), "-i", str(audio_path),
+            "ffmpeg", "-y"
+        ]
+        if gpu_available:
+            cmd_v1.extend(["-hwaccel", "cuda"])
+        cmd_v1.extend([
+            "-i", "visual.mp4", "-i", str(logo_path), "-i", str(audio_path),
             "-filter_complex", filter_v1,
             "-map", "[v]", "-map", "2:a",
-            "-c:v", "libx264", "-c:a", "aac", "-shortest",
+            "-c:v", video_codec
+        ])
+        if gpu_available:
+            cmd_v1.extend(["-preset", "p4", "-tune", "hq"])
+        else:
+            cmd_v1.extend(["-preset", "fast"])
+        cmd_v1.extend([
+            "-c:a", "aac", "-shortest",
             str(output_no_subs)
-        ]
+        ])
     else:
         cmd_v1 = [
-            "ffmpeg", "-y", "-i", "visual.mp4", "-i", str(audio_path),
-            "-vf", "scale=1600:900",
-            "-c:v", "libx264", "-c:a", "aac", "-shortest",
-            str(output_no_subs)
+            "ffmpeg", "-y"
         ]
+        if gpu_available:
+            cmd_v1.extend(["-hwaccel", "cuda"])
+        cmd_v1.extend([
+            "-i", "visual.mp4", "-i", str(audio_path),
+            "-vf", "scale=1600:900",
+            "-c:v", video_codec
+        ])
+        if gpu_available:
+            cmd_v1.extend(["-preset", "p4", "-tune", "hq"])
+        else:
+            cmd_v1.extend(["-preset", "fast"])
+        cmd_v1.extend([
+            "-c:a", "aac", "-shortest",
+            str(output_no_subs)
+        ])
     
     subprocess.run(cmd_v1, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    print("✅ Version 1 (900p no subs) created")
     
     # Version 2: 1080p with subs
     ass_path = str(ass_file).replace('\\', '/').replace(':', '\\\\:')
@@ -752,23 +820,48 @@ def process_visuals(sentences, audio_path, ass_file, logo_path, output_no_subs, 
     if logo_path and os.path.exists(logo_path):
         filter_v2 = f"[0:v]scale=1920:1080[bg];[1:v]scale=230:-1[logo];[bg][logo]overlay=30:30[withlogo];[withlogo]subtitles='{ass_path}'[v]"
         cmd_v2 = [
-            "ffmpeg", "-y", "-i", "visual.mp4", "-i", str(logo_path), "-i", str(audio_path),
+            "ffmpeg", "-y"
+        ]
+        if gpu_available:
+            cmd_v2.extend(["-hwaccel", "cuda"])
+        cmd_v2.extend([
+            "-i", "visual.mp4", "-i", str(logo_path), "-i", str(audio_path),
             "-filter_complex", filter_v2,
             "-map", "[v]", "-map", "2:a",
-            "-c:v", "libx264", "-c:a", "aac", "-shortest",
+            "-c:v", video_codec
+        ])
+        if gpu_available:
+            cmd_v2.extend(["-preset", "p4", "-tune", "hq"])
+        else:
+            cmd_v2.extend(["-preset", "fast"])
+        cmd_v2.extend([
+            "-c:a", "aac", "-shortest",
             str(output_with_subs)
-        ]
+        ])
     else:
         filter_v2 = f"[0:v]scale=1920:1080[bg];[bg]subtitles='{ass_path}'[v]"
         cmd_v2 = [
-            "ffmpeg", "-y", "-i", "visual.mp4", "-i", str(audio_path),
+            "ffmpeg", "-y"
+        ]
+        if gpu_available:
+            cmd_v2.extend(["-hwaccel", "cuda"])
+        cmd_v2.extend([
+            "-i", "visual.mp4", "-i", str(audio_path),
             "-filter_complex", filter_v2,
             "-map", "[v]", "-map", "1:a",
-            "-c:v", "libx264", "-c:a", "aac", "-shortest",
+            "-c:v", video_codec
+        ])
+        if gpu_available:
+            cmd_v2.extend(["-preset", "p4", "-tune", "hq"])
+        else:
+            cmd_v2.extend(["-preset", "fast"])
+        cmd_v2.extend([
+            "-c:a", "aac", "-shortest",
             str(output_with_subs)
-        ]
+        ])
     
     subprocess.run(cmd_v2, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    print("✅ Version 2 (1080p with subs) created")
     
     return True
 
