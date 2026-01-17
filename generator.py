@@ -1,10 +1,9 @@
 """
-AI VIDEO GENERATOR - SPANISH VERSION (FIXED)
+AI VIDEO GENERATOR - SPANISH VERSION (NATURE ONLY)
 ============================================
 ✅ Chatterbox Multilingual TTS for Spanish audio (language_id="es")
-✅ Helsinki-NLP translation model for live Spanish->English queries
-✅ No hardcoded dictionaries - all live AI translation
-✅ Proper error handling and installation
+✅ All videos use nature/forest queries (no humans, beaches, pools)
+✅ Pure natural greenery scenes
 """
 
 import os
@@ -51,7 +50,6 @@ except Exception as e:
 import torch
 import torchaudio as ta
 import google.generativeai as genai
-from transformers import MarianMTModel, MarianTokenizer
 
 # Import Chatterbox
 TTS_MODEL = None
@@ -107,20 +105,6 @@ if TTS_AVAILABLE:
         print(f"⚠️ Chatterbox loading failed: {e}")
         TTS_AVAILABLE = False
 
-# Translation Model (Spanish -> English)
-print("Loading Spanish->English Translation Model...")
-TRANSLATOR = None
-TRANSLATOR_TOKENIZER = None
-TRANSLATOR_AVAILABLE = False
-try:
-    translation_model_name = "Helsinki-NLP/opus-mt-es-en"
-    TRANSLATOR_TOKENIZER = MarianTokenizer.from_pretrained(translation_model_name)
-    TRANSLATOR = MarianMTModel.from_pretrained(translation_model_name)
-    TRANSLATOR_AVAILABLE = True
-    print("✅ Translation Model loaded (Helsinki-NLP opus-mt-es-en)")
-except Exception as e:
-    print(f"⚠️ Translation Model failed: {e}")
-
 # ========================================== 
 # 4. CONTENT FILTERS
 # ========================================== 
@@ -163,69 +147,42 @@ def is_content_appropriate(text):
     return True
 
 # ========================================== 
-# 5. LIVE TRANSLATION (NO DICTIONARIES)
+# 5. NATURE VIDEO QUERIES
 # ========================================== 
 
-def translate_spanish_to_english(spanish_text):
-    """Live translation using Helsinki-NLP model"""
-    if not TRANSLATOR_AVAILABLE:
-        print("    ⚠️ Translator not available")
-        return "cinematic background"
-    
-    try:
-        text = spanish_text.strip()[:500]
-        
-        inputs = TRANSLATOR_TOKENIZER(
-            text, 
-            return_tensors="pt", 
-            padding=True, 
-            truncation=True, 
-            max_length=512
-        )
-        
-        translated_tokens = TRANSLATOR.generate(
-            **inputs,
-            max_length=100,
-            num_beams=4,
-            early_stopping=True
-        )
-        
-        english_text = TRANSLATOR_TOKENIZER.decode(
-            translated_tokens[0], 
-            skip_special_tokens=True
-        )
-        
-        print(f"    🌐 Translation:")
-        print(f"       ES: '{spanish_text[:60]}...'")
-        print(f"       EN: '{english_text}'")
-        
-        return english_text.strip()
-        
-    except Exception as e:
-        print(f"    ⚠️ Translation error: {e}")
-        words = re.findall(r'\b\w{4,}\b', spanish_text)
-        return words[0] if words else "background"
+# Predefined nature queries (no humans, beaches, or pools)
+NATURE_QUERIES = [
+    "forest trees cinematic 4k",
+    "mountain landscape nature 4k",
+    "waterfall nature cinematic",
+    "green forest wilderness 4k",
+    "river flowing nature 4k",
+    "rainforest jungle cinematic",
+    "pine forest trees 4k",
+    "meadow grass flowers nature",
+    "autumn forest leaves 4k",
+    "spring forest green 4k",
+    "misty forest morning 4k",
+    "lake reflection nature 4k",
+    "valley landscape cinematic",
+    "hills greenery nature 4k",
+    "woodland forest cinematic",
+    "nature sunrise trees 4k",
+    "sunset mountain landscape",
+    "clouds sky nature 4k",
+    "birds flying forest 4k",
+    "deer forest wildlife 4k",
+    "butterfly flowers nature",
+    "leaves wind forest 4k",
+    "rain forest nature 4k",
+    "snow mountain landscape",
+    "canyon nature cinematic"
+]
 
-def generate_search_query_from_spanish(spanish_text):
-    """Generate English search query from Spanish text"""
-    english_text = translate_spanish_to_english(spanish_text)
-    
-    if not english_text or len(english_text) < 3:
-        return "cinematic 4k"
-    
-    words = re.findall(r'\b\w{4,}\b', english_text.lower())
-    keywords = [w for w in words if w not in ['this', 'that', 'with', 'from', 'have', 'been', 'were', 'will']][:2]
-    
-    if not keywords:
-        return "background cinematic"
-    
-    query = " ".join(keywords) + " cinematic 4k"
-    
-    if not is_content_appropriate(query):
-        print(f"      ⚠️ Query filtered, using generic")
-        return "nature cinematic"
-    
-    print(f"    🎯 Search Query: '{query}'")
+def get_nature_query():
+    """Get random nature query"""
+    query = random.choice(NATURE_QUERIES)
+    print(f"    🌲 Nature Query: '{query}'")
     return query
 
 # ========================================== 
@@ -415,14 +372,6 @@ def generate_tts_audio_chatterbox(sentences, output_path, audio_prompt_path=None
                 print(f"    🔍 First audio shape: {wav_audio.shape}")
                 print(f"    🔍 First audio dtype: {wav_audio.dtype}")
             
-            # Calculate timing
-            target_duration = sent['end'] - sent['start']
-            current_duration = wav_audio.shape[-1] / sample_rate
-            
-            # DON'T ADJUST SPEED - this is causing the chipmunk effect!
-            # Instead, just use the audio as-is and let it naturally determine timing
-            # The issue was: interpolate was changing the audio incorrectly
-            
             # Add small silence padding between sentences (0.2s)
             silence_samples = int(0.2 * sample_rate)
             silence = torch.zeros((wav_audio.shape[0] if wav_audio.dim() > 1 else 1, silence_samples))
@@ -468,9 +417,9 @@ def generate_tts_audio_chatterbox(sentences, output_path, audio_prompt_path=None
             subprocess.run([
                 "ffmpeg", "-y",
                 "-i", temp_path,
-                "-ar", str(sample_rate),  # Keep original sample rate
-                "-ac", "1",               # Force mono
-                "-acodec", "pcm_s16le",  # 16-bit PCM
+                "-ar", str(sample_rate),
+                "-ac", "1",
+                "-acodec", "pcm_s16le",
                 str(output_path)
             ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
             
@@ -613,15 +562,15 @@ def format_ass_time(seconds):
     return f"{h}:{m:02d}:{s:02d}.{cs:02d}"
 
 # ========================================== 
-# 10. VIDEO SEARCH WITH LIVE TRANSLATION
+# 10. VIDEO SEARCH (NATURE ONLY)
 # ========================================== 
 
 USED_VIDEO_URLS = set()
 
-def search_videos_with_translation(spanish_text, sentence_index):
-    """Search videos using live AI translation"""
-    english_query = generate_search_query_from_spanish(spanish_text)
-    return search_videos_by_query(english_query, sentence_index)
+def search_videos_nature_only(sentence_index):
+    """Search videos using nature queries only"""
+    query = get_nature_query()
+    return search_videos_by_query(query, sentence_index)
 
 def search_videos_by_query(query, sentence_index, page=None):
     """Search Pexels and Pixabay"""
@@ -747,29 +696,18 @@ def download_and_process_video(results, target_duration, clip_index):
     return None
 
 def process_single_clip(args):
-    """Process single clip with live translation"""
+    """Process single clip with nature queries"""
     i, sent, sentences_count = args
     
     duration = max(3.5, sent['end'] - sent['start'])
     
-    print(f"  🔍 Clip {i+1}/{sentences_count}: '{sent['text'][:50]}...'")
+    print(f"  🌲 Clip {i+1}/{sentences_count}: Nature Scene")
     
     for attempt in range(1, 7):
         print(f"    Attempt {attempt}")
         
-        if attempt == 1:
-            results = search_videos_with_translation(sent['text'], i)
-        elif attempt == 2:
-            alt_text = " ".join(sent['text'].split()[:10])
-            results = search_videos_with_translation(alt_text, i)
-        elif attempt == 3:
-            results = search_videos_by_query("nature cinematic", i)
-        elif attempt == 4:
-            results = search_videos_by_query("abstract motion", i)
-        elif attempt == 5:
-            results = search_videos_by_query("documentary footage", i)
-        else:
-            results = search_videos_by_query("stock video", i, page=random.randint(1, 5))
+        # Always use nature queries
+        results = search_videos_nature_only(i)
         
         if results:
             clip_path = download_and_process_video(results, duration, i)
@@ -814,14 +752,15 @@ def process_visuals(sentences, audio_path, ass_file, logo_path, output_no_subs, 
                 index = future_to_index[future]
                 failed_clips.append(index)
     
-    # Create color backgrounds for failed clips
+    # Create green forest backgrounds for failed clips
     if failed_clips:
-        print(f"⚠️ Creating backgrounds for {len(failed_clips)} clips")
+        print(f"⚠️ Creating green backgrounds for {len(failed_clips)} clips")
         for idx in failed_clips:
             if idx < len(sentences):
                 duration = max(3.5, sentences[idx]['end'] - sentences[idx]['start'])
                 color_path = TEMP_DIR / f"color_{idx}.mp4"
-                colors = ["0x2E86C1", "0x27AE60", "0x8E44AD"]
+                # Use green forest colors
+                colors = ["0x2E7D32", "0x388E3C", "0x43A047"]
                 
                 subprocess.run([
                     "ffmpeg", "-y", "-f", "lavfi",
@@ -964,9 +903,9 @@ def upload_to_google_drive(file_path):
 # ========================================== 
 
 print("\n" + "="*60)
-print("🎬 SPANISH VIDEO GENERATOR")
+print("🎬 SPANISH VIDEO GENERATOR - NATURE ONLY")
 print("✅ Chatterbox Multilingual TTS (language_id='es')")
-print("✅ Helsinki-NLP Live Translation")
+print("🌲 Pure Nature Videos (No Humans, No Beaches)")
 print("="*60)
 
 try:
@@ -1044,8 +983,8 @@ try:
     ass_file = TEMP_DIR / "subtitles.ass"
     create_ass_file(sentences, ass_file)
     
-    # Process visuals with live translation
-    update_status(40, "🌐 Processing visuals with AI translation...")
+    # Process visuals with nature queries only
+    update_status(40, "🌲 Processing nature visuals...")
     output_no_subs = OUTPUT_DIR / f"spanish_{JOB_ID}_no_subs.mp4"
     output_with_subs = OUTPUT_DIR / f"spanish_{JOB_ID}_with_subs.mp4"
     
@@ -1061,9 +1000,9 @@ try:
             links['with_subs'] = upload_to_google_drive(output_with_subs)
         
         # Final status
-        final_msg = "✅ Spanish Video Complete!\n"
+        final_msg = "✅ Spanish Nature Video Complete!\n"
         final_msg += "🎙️ Chatterbox Spanish TTS (language_id='es')\n"
-        final_msg += "🌐 AI Translation for videos\n"
+        final_msg += "🌲 Pure Nature Videos (No Humans)\n"
         if links.get('no_subs'):
             final_msg += f"📹 No Subs: {links['no_subs']}\n"
         if links.get('with_subs'):
