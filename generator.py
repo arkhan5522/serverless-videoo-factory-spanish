@@ -1,4 +1,4 @@
-g"""
+"""
 AI VIDEO GENERATOR - SPANISH VERSION (NATURE ONLY)
 ============================================
 ✅ Chatterbox Multilingual TTS for Spanish audio (language_id="es")
