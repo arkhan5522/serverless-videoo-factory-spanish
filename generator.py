@@ -1,4 +1,4 @@
-"""
+g"""
 AI VIDEO GENERATOR - SPANISH VERSION (NATURE ONLY)
 ============================================
 ✅ Chatterbox Multilingual TTS for Spanish audio (language_id="es")
@@ -16,6 +16,7 @@ import shutil
 import json
 import concurrent.futures
 import requests
+import gc
 from pathlib import Path
 
 # ========================================== 
@@ -25,31 +26,29 @@ from pathlib import Path
 print("--- 🔧 Installing Dependencies ---")
 try:
     libs = [
-        "torch",
+        "chatterbox-tts",
         "torchaudio", 
+        "assemblyai",
         "google-generativeai",
         "requests",
+        "beautifulsoup4",
+        "pydub",
         "numpy",
         "transformers",
         "pillow",
-        "sentencepiece",
-        "chatterbox-tts"
+        "opencv-python",
+        "--quiet"
     ]
-    
-    for lib in libs:
-        try:
-            subprocess.check_call([sys.executable, "-m", "pip", "install", lib, "--quiet"])
-            print(f"✅ {lib}")
-        except Exception as e:
-            print(f"⚠️  {lib}: {str(e)[:50]}")
-    
-    subprocess.run("apt-get update -qq && apt-get install -qq -y ffmpeg", shell=True, check=False)
+    subprocess.check_call([sys.executable, "-m", "pip", "install"] + libs)
+    subprocess.run("apt-get update -qq && apt-get install -qq -y ffmpeg", shell=True)
 except Exception as e:
     print(f"Install Warning: {e}")
 
 import torch
-import torchaudio as ta
+import torchaudio
+import assemblyai as aai
 import google.generativeai as genai
+from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
 
 # Import Chatterbox
 TTS_MODEL = None
