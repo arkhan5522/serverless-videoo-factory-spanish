@@ -1,8 +1,8 @@
 """
-AI VIDEO GENERATOR - SPANISH VERSION (NATURE ONLY)
+AI VIDEO GENERATOR - SPANISH VERSION (NATURE ONLY - FIXED)
 ============================================
 ✅ Chatterbox Multilingual TTS for Spanish audio (language_id="es")
-✅ All videos use nature/forest queries (no humans, beaches, pools)
+✅ ONLY nature queries - NO T5, NO translation, NO topic-based queries
 ✅ Pure natural greenery scenes
 """
 
@@ -16,7 +16,6 @@ import shutil
 import json
 import concurrent.futures
 import requests
-import gc
 from pathlib import Path
 
 # ========================================== 
@@ -26,33 +25,40 @@ from pathlib import Path
 print("--- 🔧 Installing Dependencies ---")
 try:
     libs = [
-        "chatterbox-tts",
+        "torch",
         "torchaudio", 
-        "assemblyai",
         "google-generativeai",
         "requests",
-        "beautifulsoup4",
-        "pydub",
         "numpy",
-        "transformers",
         "pillow",
-        "opencv-python",
-        "--quiet"
+        "chatterbox-tts"
     ]
-    subprocess.check_call([sys.executable, "-m", "pip", "install"] + libs)
-    subprocess.run("apt-get update -qq && apt-get install -qq -y ffmpeg", shell=True)
+    
+    for lib in libs:
+        try:
+            subprocess.check_call([sys.executable, "-m", "pip", "install", lib, "--quiet"])
+            print(f"✅ {lib}")
+        except Exception as e:
+            print(f"⚠️  {lib}: {str(e)[:50]}")
+    
+    subprocess.run("apt-get update -qq && apt-get install -qq -y ffmpeg", shell=True, check=False)
 except Exception as e:
     print(f"Install Warning: {e}")
 
 import torch
-import torchaudio
-import assemblyai as aai
+import torchaudio as ta
 import google.generativeai as genai
-from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
 
 # Import Chatterbox
-from chatterbox.mtl_tts import ChatterboxMultilingualTTS
-
+TTS_MODEL = None
+TTS_AVAILABLE = False
+try:
+    from chatterbox.mtl_tts import ChatterboxMultilingualTTS
+    TTS_AVAILABLE = True
+    print("✅ Chatterbox Multilingual TTS imported successfully")
+except ImportError as e:
+    print(f"⚠️ Chatterbox import failed: {e}")
+    print("Will use fallback TTS")
 
 # ========================================== 
 # 2. CONFIGURATION
@@ -86,62 +92,25 @@ TEMP_DIR.mkdir(exist_ok=True)
 
 print("--- 🤖 Loading AI Models ---")
 
-# Load Chatterbox Multilingual TTS
-try:
+# Load Chatterbox Multilingual TTS ONLY
+if TTS_AVAILABLE:
+    try:
         device = "cuda" if torch.cuda.is_available() else "cpu"
         print(f"Loading Chatterbox on {device}...")
         TTS_MODEL = ChatterboxMultilingualTTS.from_pretrained(device=device)
         print("✅ Chatterbox Multilingual TTS loaded successfully")
-except Exception as e:
+    except Exception as e:
         print(f"⚠️ Chatterbox loading failed: {e}")
         TTS_AVAILABLE = False
 
-# ========================================== 
-# 4. CONTENT FILTERS
-# ========================================== 
-
-EXPLICIT_CONTENT_BLACKLIST = [
-    'nude', 'nudity', 'naked', 'pornography', 'explicit sexual',
-    'xxx', 'adult xxx', 'erotic xxx', 'nsfw','lgbtq','LGBTQ','war','pork',
-    'bikini','swim','violence','drugs','terror','gun','gambling'
-]
-
-RELIGIOUS_HOLY_TERMS = [
-    'jesus', 'christ', 'god', 'lord', 'bible', 'gospel', 'church worship',
-    'crucifix', 'crucifixion', 'virgin mary', 'holy spirit', 'baptism',
-    'yahweh', 'jehovah', 'torah', 'talmud', 'synagogue', 'rabbi', 'kosher',
-    'hanukkah', 'yom kippur', 'passover',
-    'krishna', 'rama', 'shiva', 'vishnu', 'brahma', 'ganesh', 'hindu temple',
-    'vedas', 'bhagavad gita', 'diwali',
-    'buddha', 'buddhist temple', 'nirvana', 'dharma', 'meditation buddha',
-    'tibetan monk', 'dalai lama',
-    'holy book', 'scripture', 'religious ceremony', 'worship service',
-    'religious ritual', 'sacred text', 'divine revelation'
-]
-
-def is_content_appropriate(text):
-    """Content filter with word boundary matching"""
-    text_lower = text.lower()
-    
-    for term in EXPLICIT_CONTENT_BLACKLIST:
-        pattern = r'\b' + re.escape(term) + r'\b'
-        if re.search(pattern, text_lower):
-            print(f"      🚫 BLOCKED: Inappropriate - '{term}'")
-            return False
-    
-    for term in RELIGIOUS_HOLY_TERMS:
-        pattern = r'\b' + re.escape(term) + r'\b'
-        if re.search(pattern, text_lower):
-            print(f"      🚫 BLOCKED: Religious - '{term}'")
-            return False
-    
-    return True
+print("🚫 NO T5 Translation Model - Using nature queries only")
+print("🌲 All videos will show pure nature scenes")
 
 # ========================================== 
-# 5. NATURE VIDEO QUERIES
+# 4. NATURE VIDEO QUERIES (HARDCODED)
 # ========================================== 
 
-# Predefined nature queries (no humans, beaches, or pools)
+# Predefined nature queries - NO humans, NO beaches, NO pools
 NATURE_QUERIES = [
     "forest trees cinematic 4k",
     "mountain landscape nature 4k",
@@ -167,17 +136,22 @@ NATURE_QUERIES = [
     "leaves wind forest 4k",
     "rain forest nature 4k",
     "snow mountain landscape",
-    "canyon nature cinematic"
+    "canyon nature cinematic",
+    "tropical rainforest 4k",
+    "alpine meadow flowers",
+    "bamboo forest green",
+    "redwood trees forest",
+    "oak tree nature 4k"
 ]
 
 def get_nature_query():
-    """Get random nature query"""
+    """ALWAYS return random nature query - ignore Spanish text completely"""
     query = random.choice(NATURE_QUERIES)
-    print(f"    🌲 Nature Query: '{query}'")
+    print(f"    🌲 Using Nature Query: '{query}'")
     return query
 
 # ========================================== 
-# 6. STATUS UPDATES
+# 5. STATUS UPDATES
 # ========================================== 
 
 LOG_BUFFER = []
@@ -273,7 +247,7 @@ def download_asset(path, local):
     return False
 
 # ========================================== 
-# 7. SPANISH SCRIPT GENERATION
+# 6. SPANISH SCRIPT GENERATION
 # ========================================== 
 
 def generate_spanish_script(topic, minutes):
@@ -287,7 +261,6 @@ INSTRUCCIONES CRÍTICAS:
 - Escribe SOLO texto de narración hablada en ESPAÑOL
 - NO incluyas direcciones de escenario, efectos de sonido o [corchetes]
 - Comienza directamente con el contenido
-- Directrices de contenido islámico: No menciones alcohol, relaciones inapropiadas, apuestas o cerdo
 - Tono educativo y apropiado para toda la familia
 - Escribe en un estilo documental profesional
 - Mantén los párrafos cohesivos y fluidos
@@ -324,14 +297,11 @@ def call_gemini(prompt):
     return "Error en la generación del guión."
 
 # ========================================== 
-# 8. CHATTERBOX TTS AUDIO GENERATION
+# 7. CHATTERBOX TTS AUDIO GENERATION
 # ========================================== 
 
 def generate_tts_audio_chatterbox(sentences, output_path, audio_prompt_path=None):
-    """
-    Generate Spanish TTS audio using Chatterbox Multilingual TTS
-    Uses language_id="es" for Spanish as per documentation
-    """
+    """Generate Spanish TTS audio using Chatterbox"""
     if not TTS_AVAILABLE or TTS_MODEL is None:
         print("⚠️ Chatterbox TTS not available, creating silent audio")
         return create_silent_audio(sentences, output_path)
@@ -344,7 +314,6 @@ def generate_tts_audio_chatterbox(sentences, output_path, audio_prompt_path=None
         for i, sent in enumerate(sentences):
             text = sent['text'].strip()
             
-            # Generate Spanish audio using Chatterbox with language_id="es"
             if audio_prompt_path and os.path.exists(audio_prompt_path):
                 wav_audio = TTS_MODEL.generate(
                     text, 
@@ -354,57 +323,39 @@ def generate_tts_audio_chatterbox(sentences, output_path, audio_prompt_path=None
             else:
                 wav_audio = TTS_MODEL.generate(text, language_id="es")
             
-            # Get sample rate from model
             sample_rate = TTS_MODEL.sr
             
-            # DIAGNOSTIC: Print first segment info
             if i == 0:
                 print(f"    🔍 Model sample rate: {sample_rate} Hz")
-                print(f"    🔍 First audio shape: {wav_audio.shape}")
-                print(f"    🔍 First audio dtype: {wav_audio.dtype}")
             
-            # Add small silence padding between sentences (0.2s)
             silence_samples = int(0.2 * sample_rate)
             silence = torch.zeros((wav_audio.shape[0] if wav_audio.dim() > 1 else 1, silence_samples))
             
-            # Ensure wav_audio is 2D (channels, samples)
             if wav_audio.dim() == 1:
                 wav_audio = wav_audio.unsqueeze(0)
             
-            # Concatenate audio with silence
             segment_with_pause = torch.cat([wav_audio, silence], dim=-1)
-            
             all_audio_segments.append(segment_with_pause)
             
             if (i + 1) % 10 == 0:
                 print(f"    ✅ Generated {i+1}/{len(sentences)} audio segments")
         
-        # Concatenate all audio segments
         if all_audio_segments:
-            # Ensure all tensors have same number of channels
             max_channels = max(seg.shape[0] if seg.dim() > 1 else 1 for seg in all_audio_segments)
             
             processed_segments = []
             for seg in all_audio_segments:
                 if seg.dim() == 1:
                     seg = seg.unsqueeze(0)
-                
-                # If mono and we need stereo, duplicate channel
                 if seg.shape[0] < max_channels:
                     seg = seg.repeat(max_channels, 1)
-                
                 processed_segments.append(seg)
             
-            # Concatenate along time dimension
             full_audio = torch.cat(processed_segments, dim=-1)
             
-            # Save with temp file first, then re-encode
             temp_path = str(output_path).replace('.wav', '_temp.wav')
             ta.save(temp_path, full_audio, sample_rate)
             
-            print(f"    💾 Raw audio saved, re-encoding for compatibility...")
-            
-            # Re-encode with ffmpeg to ensure proper format
             subprocess.run([
                 "ffmpeg", "-y",
                 "-i", temp_path,
@@ -414,34 +365,22 @@ def generate_tts_audio_chatterbox(sentences, output_path, audio_prompt_path=None
                 str(output_path)
             ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
             
-            # Remove temp file
             try:
                 os.remove(temp_path)
             except:
                 pass
             
-            # Verify final output
             import wave
             with wave.open(str(output_path), 'rb') as wav_file:
-                final_rate = wav_file.getframerate()
-                final_frames = wav_file.getnframes()
-                final_duration = final_frames / final_rate
-                
-                print(f"✅ Chatterbox Spanish TTS audio saved: {output_path}")
-                print(f"   Duration: {final_duration:.1f}s")
-                print(f"   Sample Rate: {final_rate} Hz")
-                print(f"   Channels: {wav_file.getnchannels()}")
+                final_duration = wav_file.getnframes() / wav_file.getframerate()
+                print(f"✅ Spanish TTS audio: {final_duration:.1f}s")
             
             return True
         else:
-            print("❌ No audio segments generated")
             return create_silent_audio(sentences, output_path)
         
     except Exception as e:
-        print(f"❌ Chatterbox TTS generation failed: {e}")
-        import traceback
-        traceback.print_exc()
-        print("Falling back to silent audio")
+        print(f"❌ TTS failed: {e}")
         return create_silent_audio(sentences, output_path)
 
 def create_silent_audio(sentences, output_path):
@@ -459,7 +398,7 @@ def create_silent_audio(sentences, output_path):
     return True
 
 # ========================================== 
-# 9. SUBTITLE SYSTEM
+# 8. SUBTITLE SYSTEM
 # ========================================== 
 
 SUBTITLE_STYLES = {
@@ -523,7 +462,6 @@ def create_ass_file(sentences, ass_file):
             end_time = format_ass_time(s['end'])
             text = s['text'].strip().replace('\\', '\\\\')
             
-            # Split into lines (max 35 chars)
             words = text.split()
             lines = []
             current_line = []
@@ -553,17 +491,20 @@ def format_ass_time(seconds):
     return f"{h}:{m:02d}:{s:02d}.{cs:02d}"
 
 # ========================================== 
-# 10. VIDEO SEARCH (NATURE ONLY)
+# 9. VIDEO SEARCH (NATURE ONLY - NO T5)
 # ========================================== 
 
 USED_VIDEO_URLS = set()
 
-def search_videos_nature_only(sentence_index):
-    """Search videos using nature queries only"""
-    query = get_nature_query()
-    return search_videos_by_query(query, sentence_index)
+def search_videos_nature_only(clip_index):
+    """
+    CRITICAL: ALWAYS use nature queries - IGNORE Spanish text completely
+    NO T5, NO translation, NO topic analysis
+    """
+    query = get_nature_query()  # Get random nature query
+    return search_videos_by_query(query, clip_index)
 
-def search_videos_by_query(query, sentence_index, page=None):
+def search_videos_by_query(query, clip_index, page=None):
     """Search Pexels and Pixabay"""
     if page is None:
         page = random.randint(1, 3)
@@ -687,17 +628,20 @@ def download_and_process_video(results, target_duration, clip_index):
     return None
 
 def process_single_clip(args):
-    """Process single clip with nature queries"""
+    """
+    Process single clip - ALWAYS use nature queries
+    NO analysis of Spanish text
+    """
     i, sent, sentences_count = args
     
     duration = max(3.5, sent['end'] - sent['start'])
     
-    print(f"  🌲 Clip {i+1}/{sentences_count}: Nature Scene")
+    print(f"  🌲 Clip {i+1}/{sentences_count}: Nature Scene (ignoring text)")
     
     for attempt in range(1, 7):
-        print(f"    Attempt {attempt}")
+        print(f"    Attempt {attempt}: Nature Query Only")
         
-        # Always use nature queries
+        # ALWAYS use nature queries - NEVER analyze Spanish text
         results = search_videos_nature_only(i)
         
         if results:
@@ -713,7 +657,8 @@ def process_single_clip(args):
 
 def process_visuals(sentences, audio_path, ass_file, logo_path, output_no_subs, output_with_subs):
     """Process visuals with parallel processing"""
-    print("🎬 Processing Visuals...")
+    print("🎬 Processing Visuals - NATURE ONLY...")
+    print("🌲 All videos will be nature scenes regardless of Spanish text")
     
     clip_args = [(i, sent, len(sentences)) for i, sent in enumerate(sentences)]
     clips = [None] * len(sentences)
@@ -743,14 +688,13 @@ def process_visuals(sentences, audio_path, ass_file, logo_path, output_no_subs, 
                 index = future_to_index[future]
                 failed_clips.append(index)
     
-    # Create green forest backgrounds for failed clips
+    # Create green backgrounds for failed clips
     if failed_clips:
         print(f"⚠️ Creating green backgrounds for {len(failed_clips)} clips")
         for idx in failed_clips:
             if idx < len(sentences):
                 duration = max(3.5, sentences[idx]['end'] - sentences[idx]['start'])
                 color_path = TEMP_DIR / f"color_{idx}.mp4"
-                # Use green forest colors
                 colors = ["0x2E7D32", "0x388E3C", "0x43A047"]
                 
                 subprocess.run([
@@ -897,6 +841,7 @@ print("\n" + "="*60)
 print("🎬 SPANISH VIDEO GENERATOR - NATURE ONLY")
 print("✅ Chatterbox Multilingual TTS (language_id='es')")
 print("🌲 Pure Nature Videos (No Humans, No Beaches)")
+print("🚫 NO T5, NO Translation - Direct Nature Queries")
 print("="*60)
 
 try:
@@ -975,7 +920,7 @@ try:
     create_ass_file(sentences, ass_file)
     
     # Process visuals with nature queries only
-    update_status(40, "🌲 Processing nature visuals...")
+    update_status(40, "🌲 Processing nature visuals (ignoring text content)...")
     output_no_subs = OUTPUT_DIR / f"spanish_{JOB_ID}_no_subs.mp4"
     output_with_subs = OUTPUT_DIR / f"spanish_{JOB_ID}_with_subs.mp4"
     
@@ -994,6 +939,7 @@ try:
         final_msg = "✅ Spanish Nature Video Complete!\n"
         final_msg += "🎙️ Chatterbox Spanish TTS (language_id='es')\n"
         final_msg += "🌲 Pure Nature Videos (No Humans)\n"
+        final_msg += "🚫 NO T5/Translation Used\n"
         if links.get('no_subs'):
             final_msg += f"📹 No Subs: {links['no_subs']}\n"
         if links.get('with_subs'):
@@ -1005,6 +951,7 @@ try:
         print(f"Script: {len(script_text)} chars")
         print(f"Sentences: {len(sentences)}")
         print(f"Duration: {total_duration:.1f}s")
+        print("🌲 All videos used nature queries only")
         if links:
             print("Links:", links)
         
