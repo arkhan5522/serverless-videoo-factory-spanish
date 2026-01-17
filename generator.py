@@ -87,7 +87,6 @@ TEMP_DIR.mkdir(exist_ok=True)
 print("--- 🤖 Loading AI Models ---")
 
 # Load Chatterbox Multilingual TTS
-if TTS_AVAILABLE:
     try:
         device = "cuda" if torch.cuda.is_available() else "cpu"
         print(f"Loading Chatterbox on {device}...")
