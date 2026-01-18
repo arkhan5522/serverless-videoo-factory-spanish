@@ -4,6 +4,7 @@ AI VIDEO GENERATOR - SPANISH VERSION (NATURE ONLY - FIXED)
 ✅ Chatterbox Multilingual TTS for Spanish audio (language_id="es")
 ✅ ONLY nature queries - NO T5, NO translation, NO topic-based queries
 ✅ Pure natural greenery scenes
+✅ FIXED: Concatenation and upload issues
 """
 
 import os
@@ -597,17 +598,39 @@ def download_and_process_video(results, target_duration, clip_index):
             if os.path.exists(raw_path) and os.path.getsize(raw_path) > 0:
                 output_path = TEMP_DIR / f"clip_{clip_index}.mp4"
                 
-                cmd = [
-                    "ffmpeg", "-y",
-                    "-i", str(raw_path),
-                    "-t", str(target_duration),
-                    "-vf", "scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080,fps=30",
-                    "-c:v", "libx264",
-                    "-preset", "fast",
-                    "-crf", "23",
-                    "-an",
-                    str(output_path)
-                ]
+                # Check for GPU
+                gpu_available = False
+                try:
+                    result_gpu = subprocess.run(["nvidia-smi"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    gpu_available = (result_gpu.returncode == 0)
+                except:
+                    pass
+                
+                if gpu_available:
+                    cmd = [
+                        "ffmpeg", "-y",
+                        "-hwaccel", "cuda",
+                        "-i", str(raw_path),
+                        "-t", str(target_duration),
+                        "-vf", "scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080,fps=30",
+                        "-c:v", "h264_nvenc",
+                        "-preset", "p4",
+                        "-crf", "23",
+                        "-an",
+                        str(output_path)
+                    ]
+                else:
+                    cmd = [
+                        "ffmpeg", "-y",
+                        "-i", str(raw_path),
+                        "-t", str(target_duration),
+                        "-vf", "scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080,fps=30",
+                        "-c:v", "libx264",
+                        "-preset", "fast",
+                        "-crf", "23",
+                        "-an",
+                        str(output_path)
+                    ]
                 
                 subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 
@@ -700,21 +723,33 @@ def process_visuals(sentences, audio_path, ass_file, logo_path, output_no_subs, 
                 subprocess.run([
                     "ffmpeg", "-y", "-f", "lavfi",
                     "-i", f"color=c={colors[idx % 3]}:s=1920x1080:d={duration}",
-                    "-c:v", "libx264", str(color_path)
+                    "-c:v", "libx264", "-pix_fmt", "yuv420p",
+                    str(color_path)
                 ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 
-                clips[idx] = str(color_path)
+                if os.path.exists(color_path):
+                    clips[idx] = str(color_path)
     
-    valid_clips = [c for c in clips if c and os.path.exists(c)]
+    # Filter valid clips and ensure they exist
+    valid_clips = []
+    for c in clips:
+        if c and os.path.exists(c) and os.path.getsize(c) > 1000:
+            valid_clips.append(c)
     
     if not valid_clips:
+        print("❌ No valid clips generated")
         return False
     
+    print(f"✅ Valid clips: {len(valid_clips)}/{len(sentences)}")
+    
     # GPU-accelerated concatenation
-    print("⚡ GPU-accelerated video concatenation...")
-    with open("list.txt", "w") as f:
+    print("⚡ Concatenating clips...")
+    list_file = Path("list.txt")
+    with open(list_file, "w", encoding="utf-8") as f:
         for c in valid_clips:
-            f.write(f"file '{c}'\n")
+            # Escape paths properly for ffmpeg
+            escaped_path = str(Path(c).absolute()).replace("\\", "/")
+            f.write(f"file '{escaped_path}'\n")
     
     # Check for NVIDIA GPU
     gpu_available = False
@@ -724,150 +759,146 @@ def process_visuals(sentences, audio_path, ass_file, logo_path, output_no_subs, 
     except:
         pass
     
+    visual_output = Path("visual.mp4")
+    
     if gpu_available:
         # Use NVIDIA hardware acceleration
-        subprocess.run([
+        concat_cmd = [
             "ffmpeg", "-y",
-            "-hwaccel", "cuda",
-            "-hwaccel_output_format", "cuda",
             "-f", "concat",
             "-safe", "0",
-            "-i", "list.txt",
+            "-i", str(list_file),
             "-c:v", "h264_nvenc",
             "-preset", "p4",
-            "-tune", "hq",
-            "-rc", "vbr",
             "-cq", "23",
-            "-b:v", "0",
-            "visual.mp4"
-        ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        print("✅ GPU concatenation complete")
+            str(visual_output)
+        ]
     else:
         # Fallback to CPU
-        subprocess.run(
-            "ffmpeg -y -f concat -safe 0 -i list.txt -c:v libx264 visual.mp4",
-            shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-        )
-        print("⚠️ CPU concatenation (no GPU detected)")
+        concat_cmd = [
+            "ffmpeg", "-y",
+            "-f", "concat",
+            "-safe", "0",
+            "-i", str(list_file),
+            "-c:v", "libx264",
+            "-preset", "fast",
+            str(visual_output)
+        ]
     
-    if not os.path.exists("visual.mp4"):
+    result = subprocess.run(concat_cmd, capture_output=True, text=True)
+    
+    if result.returncode != 0:
+        print(f"❌ Concatenation failed: {result.stderr[-300:]}")
         return False
     
+    if not os.path.exists(visual_output) or os.path.getsize(visual_output) < 10000:
+        print("❌ visual.mp4 invalid or too small")
+        return False
+    
+    print(f"✅ Concatenation complete: {os.path.getsize(visual_output) / (1024*1024):.1f}MB")
+    
     # Create versions
-    print("📹 Creating final videos with GPU acceleration...")
+    print("📹 Creating final videos...")
     
-    # Check GPU availability
-    gpu_available = False
-    try:
-        result = subprocess.run(["nvidia-smi"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        gpu_available = (result.returncode == 0)
-    except:
-        pass
+    # Escape ASS path for ffmpeg
+    ass_path = str(ass_file.absolute()).replace("\\", "/").replace(":", "\\\\:")
     
-    # Set codec based on GPU availability
-    video_codec = "h264_nvenc" if gpu_available else "libx264"
-    codec_msg = "GPU (NVENC)" if gpu_available else "CPU (x264)"
-    print(f"🎬 Using {codec_msg} encoding")
+    # === VERSION 1: 900p NO SUBTITLES ===
+    print("\n📹 Version 1: 900p (No Subtitles)")
+    update_status(85, "Rendering 900p version...")
     
-    # Version 1: 900p no subs
     if logo_path and os.path.exists(logo_path):
-        filter_v1 = "[0:v]scale=1600:900[bg];[1:v]scale=200:-1[logo];[bg][logo]overlay=25:25[v]"
+        filter_v1 = f"[0:v]scale=1600:900:force_original_aspect_ratio=decrease,pad=1600:900:(ow-iw)/2:(oh-ih)/2[bg];[1:v]scale=200:-1[logo];[bg][logo]overlay=25:25[v]"
         cmd_v1 = [
-            "ffmpeg", "-y"
-        ]
-        if gpu_available:
-            cmd_v1.extend(["-hwaccel", "cuda"])
-        cmd_v1.extend([
-            "-i", "visual.mp4", "-i", str(logo_path), "-i", str(audio_path),
+            "ffmpeg", "-y",
+            "-i", str(visual_output), "-i", str(logo_path), "-i", str(audio_path),
             "-filter_complex", filter_v1,
-            "-map", "[v]", "-map", "2:a",
-            "-c:v", video_codec
-        ])
-        if gpu_available:
-            cmd_v1.extend(["-preset", "p4", "-tune", "hq"])
-        else:
-            cmd_v1.extend(["-preset", "fast"])
-        cmd_v1.extend([
-            "-c:a", "aac", "-shortest",
-            str(output_no_subs)
-        ])
+            "-map", "[v]", "-map", "2:a"
+        ]
     else:
         cmd_v1 = [
-            "ffmpeg", "-y"
+            "ffmpeg", "-y",
+            "-i", str(visual_output), "-i", str(audio_path),
+            "-vf", "scale=1600:900:force_original_aspect_ratio=decrease,pad=1600:900:(ow-iw)/2:(oh-ih)/2",
+            "-map", "0:v", "-map", "1:a"
         ]
-        if gpu_available:
-            cmd_v1.extend(["-hwaccel", "cuda"])
-        cmd_v1.extend([
-            "-i", "visual.mp4", "-i", str(audio_path),
-            "-vf", "scale=1600:900",
-            "-c:v", video_codec
-        ])
-        if gpu_available:
-            cmd_v1.extend(["-preset", "p4", "-tune", "hq"])
-        else:
-            cmd_v1.extend(["-preset", "fast"])
-        cmd_v1.extend([
-            "-c:a", "aac", "-shortest",
-            str(output_no_subs)
-        ])
     
-    subprocess.run(cmd_v1, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    print("✅ Version 1 (900p no subs) created")
+    if gpu_available:
+        cmd_v1.extend(["-c:v", "h264_nvenc", "-preset", "p4", "-b:v", "6M"])
+    else:
+        cmd_v1.extend(["-c:v", "libx264", "-preset", "fast", "-crf", "23"])
     
-    # Version 2: 1080p with subs
-    ass_path = str(ass_file).replace('\\', '/').replace(':', '\\\\:')
+    cmd_v1.extend([
+        "-c:a", "aac", "-b:a", "128k",
+        "-shortest",
+        str(output_no_subs)
+    ])
+    
+    result_v1 = subprocess.run(cmd_v1, capture_output=True, text=True)
+    
+    if result_v1.returncode != 0:
+        print(f"❌ Version 1 failed: {result_v1.stderr[-300:]}")
+        return False
+    
+    if not os.path.exists(output_no_subs) or os.path.getsize(output_no_subs) < 100000:
+        print("❌ Version 1 output invalid")
+        return False
+    
+    file_size_v1 = os.path.getsize(output_no_subs) / (1024*1024)
+    print(f"✅ Version 1: {file_size_v1:.1f}MB")
+    
+    # === VERSION 2: 1080p WITH SUBTITLES ===
+    print("\n📹 Version 2: 1080p (With Subtitles)")
+    update_status(90, "Rendering 1080p with subtitles...")
     
     if logo_path and os.path.exists(logo_path):
-        filter_v2 = f"[0:v]scale=1920:1080[bg];[1:v]scale=230:-1[logo];[bg][logo]overlay=30:30[withlogo];[withlogo]subtitles='{ass_path}'[v]"
+        filter_v2 = f"[0:v]scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2[bg];[1:v]scale=230:-1[logo];[bg][logo]overlay=30:30[withlogo];[withlogo]subtitles='{ass_path}'[v]"
         cmd_v2 = [
-            "ffmpeg", "-y"
-        ]
-        if gpu_available:
-            cmd_v2.extend(["-hwaccel", "cuda"])
-        cmd_v2.extend([
-            "-i", "visual.mp4", "-i", str(logo_path), "-i", str(audio_path),
+            "ffmpeg", "-y",
+            "-i", str(visual_output), "-i", str(logo_path), "-i", str(audio_path),
             "-filter_complex", filter_v2,
-            "-map", "[v]", "-map", "2:a",
-            "-c:v", video_codec
-        ])
-        if gpu_available:
-            cmd_v2.extend(["-preset", "p4", "-tune", "hq"])
-        else:
-            cmd_v2.extend(["-preset", "fast"])
-        cmd_v2.extend([
-            "-c:a", "aac", "-shortest",
-            str(output_with_subs)
-        ])
+            "-map", "[v]", "-map", "2:a"
+        ]
     else:
-        filter_v2 = f"[0:v]scale=1920:1080[bg];[bg]subtitles='{ass_path}'[v]"
+        filter_v2 = f"[0:v]scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2[bg];[bg]subtitles='{ass_path}'[v]"
         cmd_v2 = [
-            "ffmpeg", "-y"
-        ]
-        if gpu_available:
-            cmd_v2.extend(["-hwaccel", "cuda"])
-        cmd_v2.extend([
-            "-i", "visual.mp4", "-i", str(audio_path),
+            "ffmpeg", "-y",
+            "-i", str(visual_output), "-i", str(audio_path),
             "-filter_complex", filter_v2,
-            "-map", "[v]", "-map", "1:a",
-            "-c:v", video_codec
-        ])
-        if gpu_available:
-            cmd_v2.extend(["-preset", "p4", "-tune", "hq"])
-        else:
-            cmd_v2.extend(["-preset", "fast"])
-        cmd_v2.extend([
-            "-c:a", "aac", "-shortest",
-            str(output_with_subs)
-        ])
+            "-map", "[v]", "-map", "1:a"
+        ]
     
-    subprocess.run(cmd_v2, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    print("✅ Version 2 (1080p with subs) created")
+    if gpu_available:
+        cmd_v2.extend(["-c:v", "h264_nvenc", "-preset", "p4", "-b:v", "12M"])
+    else:
+        cmd_v2.extend(["-c:v", "libx264", "-preset", "fast", "-crf", "20"])
+    
+    cmd_v2.extend([
+        "-c:a", "aac", "-b:a", "256k",
+        "-shortest",
+        str(output_with_subs)
+    ])
+    
+    result_v2 = subprocess.run(cmd_v2, capture_output=True, text=True)
+    
+    if result_v2.returncode != 0:
+        print(f"⚠️ Version 2 failed: {result_v2.stderr[-300:]}")
+        print("Continuing with Version 1 only...")
+        return True
+    
+    if not os.path.exists(output_with_subs) or os.path.getsize(output_with_subs) < 100000:
+        print("⚠️ Version 2 output invalid")
+        return True
+    
+    file_size_v2 = os.path.getsize(output_with_subs) / (1024*1024)
+    print(f"✅ Version 2: {file_size_v2:.1f}MB")
     
     return True
 
 def upload_to_google_drive(file_path):
     """Upload to Google Drive"""
     if not os.path.exists(file_path):
+        print(f"❌ File not found: {file_path}")
         return None
     
     print(f"☁️ Uploading {os.path.basename(file_path)}...")
@@ -875,42 +906,59 @@ def upload_to_google_drive(file_path):
     client_id = os.environ.get("OAUTH_CLIENT_ID")
     client_secret = os.environ.get("OAUTH_CLIENT_SECRET")
     refresh_token = os.environ.get("OAUTH_REFRESH_TOKEN")
+    folder_id = os.environ.get("GOOGLE_DRIVE_FOLDER_ID")
     
     if not all([client_id, client_secret, refresh_token]):
+        print("❌ Missing OAuth credentials")
         return None
     
     try:
+        # Get access token
         r = requests.post("https://oauth2.googleapis.com/token", data={
             "client_id": client_id,
             "client_secret": client_secret,
             "refresh_token": refresh_token,
             "grant_type": "refresh_token"
         })
+        r.raise_for_status()
         access_token = r.json()['access_token']
         
-        metadata = {"name": os.path.basename(file_path), "mimeType": "video/mp4"}
+        # Prepare metadata
+        filename = os.path.basename(file_path)
+        file_size = os.path.getsize(file_path)
         
+        metadata = {"name": filename, "mimeType": "video/mp4"}
+        if folder_id:
+            metadata["parents"] = [folder_id]
+        
+        # Initialize resumable upload
         headers = {
             "Authorization": f"Bearer {access_token}",
             "Content-Type": "application/json",
             "X-Upload-Content-Type": "video/mp4",
-            "X-Upload-Content-Length": str(os.path.getsize(file_path))
+            "X-Upload-Content-Length": str(file_size)
         }
         
-        r = requests.post(
+        response = requests.post(
             "https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable",
             headers=headers,
             json=metadata
         )
         
-        session_uri = r.headers.get("Location")
+        if response.status_code != 200:
+            print(f"❌ Init failed: {response.text}")
+            return None
         
+        session_uri = response.headers.get("Location")
+        
+        # Upload file
         with open(file_path, "rb") as f:
             upload_resp = requests.put(session_uri, data=f)
         
         if upload_resp.status_code in [200, 201]:
             file_id = upload_resp.json().get('id')
             
+            # Make public
             requests.post(
                 f"https://www.googleapis.com/drive/v3/files/{file_id}/permissions",
                 headers={"Authorization": f"Bearer {access_token}"},
@@ -920,11 +968,13 @@ def upload_to_google_drive(file_path):
             link = f"https://drive.google.com/file/d/{file_id}/view"
             print(f"✅ Uploaded: {link}")
             return link
+        else:
+            print(f"❌ Upload failed: {upload_resp.text}")
+            return None
             
     except Exception as e:
         print(f"❌ Upload error: {e}")
-    
-    return None
+        return None
 
 # ========================================== 
 # MAIN EXECUTION
@@ -1020,7 +1070,7 @@ try:
     if process_visuals(sentences, audio_file, ass_file, ref_logo, output_no_subs, output_with_subs):
         
         # Upload to Google Drive
-        update_status(90, "☁️ Uploading to Google Drive...")
+        update_status(95, "☁️ Uploading to Google Drive...")
         
         links = {}
         if os.path.exists(output_no_subs):
