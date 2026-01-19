@@ -4,7 +4,7 @@ AI VIDEO GENERATOR - SPANISH VERSION (NATURE ONLY - FIXED)
 ✅ Chatterbox Multilingual TTS for Spanish audio (language_id="es")
 ✅ ONLY nature queries - NO T5, NO translation, NO topic-based queries
 ✅ Pure natural greenery scenes
-✅ FIXED: Concatenation and upload issues
+✅ FIXED: Concatenation issues with robust fallback
 """
 
 import os
@@ -616,6 +616,7 @@ def download_and_process_video(results, target_duration, clip_index):
                         "-c:v", "h264_nvenc",
                         "-preset", "p4",
                         "-crf", "23",
+                        "-pix_fmt", "yuv420p",
                         "-an",
                         str(output_path)
                     ]
@@ -628,6 +629,7 @@ def download_and_process_video(results, target_duration, clip_index):
                         "-c:v", "libx264",
                         "-preset", "fast",
                         "-crf", "23",
+                        "-pix_fmt", "yuv420p",
                         "-an",
                         str(output_path)
                     ]
@@ -723,7 +725,7 @@ def process_visuals(sentences, audio_path, ass_file, logo_path, output_no_subs, 
                 subprocess.run([
                     "ffmpeg", "-y", "-f", "lavfi",
                     "-i", f"color=c={colors[idx % 3]}:s=1920x1080:d={duration}",
-                    "-c:v", "libx264", "-pix_fmt", "yuv420p",
+                    "-c:v", "libx264", "-pix_fmt", "yuv420p", "-r", "30",
                     str(color_path)
                 ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 
@@ -742,14 +744,13 @@ def process_visuals(sentences, audio_path, ass_file, logo_path, output_no_subs, 
     
     print(f"✅ Valid clips: {len(valid_clips)}/{len(sentences)}")
     
-    # GPU-accelerated concatenation
+    # Re-encode and concatenate clips for compatibility
     print("⚡ Concatenating clips...")
     list_file = Path("list.txt")
     with open(list_file, "w", encoding="utf-8") as f:
         for c in valid_clips:
-            # Escape paths properly for ffmpeg
-            escaped_path = str(Path(c).absolute()).replace("\\", "/")
-            f.write(f"file '{escaped_path}'\n")
+            # Use absolute path without escaping
+            f.write(f"file '{Path(c).absolute()}'\n")
     
     # Check for NVIDIA GPU
     gpu_available = False
@@ -761,8 +762,9 @@ def process_visuals(sentences, audio_path, ass_file, logo_path, output_no_subs, 
     
     visual_output = Path("visual.mp4")
     
+    # CRITICAL FIX: Always re-encode to ensure compatible streams
+    # The concat demuxer + copy can fail with mixed sources
     if gpu_available:
-        # Use NVIDIA hardware acceleration
         concat_cmd = [
             "ffmpeg", "-y",
             "-f", "concat",
@@ -770,11 +772,12 @@ def process_visuals(sentences, audio_path, ass_file, logo_path, output_no_subs, 
             "-i", str(list_file),
             "-c:v", "h264_nvenc",
             "-preset", "p4",
-            "-cq", "23",
+            "-b:v", "8M",
+            "-pix_fmt", "yuv420p",
+            "-r", "30",
             str(visual_output)
         ]
     else:
-        # Fallback to CPU
         concat_cmd = [
             "ffmpeg", "-y",
             "-f", "concat",
@@ -782,14 +785,45 @@ def process_visuals(sentences, audio_path, ass_file, logo_path, output_no_subs, 
             "-i", str(list_file),
             "-c:v", "libx264",
             "-preset", "fast",
+            "-crf", "23",
+            "-pix_fmt", "yuv420p",
+            "-r", "30",
             str(visual_output)
         ]
     
     result = subprocess.run(concat_cmd, capture_output=True, text=True)
     
     if result.returncode != 0:
-        print(f"❌ Concatenation failed: {result.stderr[-300:]}")
-        return False
+        print(f"❌ Concatenation failed, trying fallback method...")
+        print(f"Error details: {result.stderr[-500:]}")
+        
+        # FALLBACK: Use filter_complex instead of concat demuxer
+        # This is more robust but slower
+        inputs = []
+        for c in valid_clips:
+            inputs.extend(["-i", str(c)])
+        
+        n = len(valid_clips)
+        filter_parts = [f"[{i}:v]setpts=PTS-STARTPTS,scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,fps=30[v{i}]" for i in range(n)]
+        concat_filter = ''.join(f"[v{i}]" for i in range(n)) + f"concat=n={n}:v=1:a=0[outv]"
+        
+        fallback_cmd = [
+            "ffmpeg", "-y",
+            *inputs,
+            "-filter_complex", ';'.join(filter_parts) + ';' + concat_filter,
+            "-map", "[outv]",
+            "-c:v", "libx264",
+            "-preset", "fast",
+            "-crf", "23",
+            "-pix_fmt", "yuv420p",
+            str(visual_output)
+        ]
+        
+        result = subprocess.run(fallback_cmd, capture_output=True, text=True)
+        
+        if result.returncode != 0:
+            print(f"❌ Fallback also failed: {result.stderr[-300:]}")
+            return False
     
     if not os.path.exists(visual_output) or os.path.getsize(visual_output) < 10000:
         print("❌ visual.mp4 invalid or too small")
