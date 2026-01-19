@@ -681,7 +681,7 @@ def process_single_clip(args):
     return (i, None)
 
 def process_visuals(sentences, audio_path, ass_file, logo_path, output_no_subs, output_with_subs):
-    """Process visuals with parallel processing"""
+    """Process visuals with FIXED concatenation logic"""
     print("🎬 Processing Visuals - NATURE ONLY...")
     print("🌲 All videos will be nature scenes regardless of Spanish text")
     
@@ -725,14 +725,14 @@ def process_visuals(sentences, audio_path, ass_file, logo_path, output_no_subs, 
                 subprocess.run([
                     "ffmpeg", "-y", "-f", "lavfi",
                     "-i", f"color=c={colors[idx % 3]}:s=1920x1080:d={duration}",
-                    "-c:v", "libx264", "-pix_fmt", "yuv420p", "-r", "30",
+                    "-c:v", "libx264", "-pix_fmt", "yuv420p",
                     str(color_path)
                 ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 
                 if os.path.exists(color_path):
                     clips[idx] = str(color_path)
     
-    # Filter valid clips and ensure they exist
+    # Filter valid clips
     valid_clips = []
     for c in clips:
         if c and os.path.exists(c) and os.path.getsize(c) > 1000:
@@ -744,13 +744,18 @@ def process_visuals(sentences, audio_path, ass_file, logo_path, output_no_subs, 
     
     print(f"✅ Valid clips: {len(valid_clips)}/{len(sentences)}")
     
-    # Re-encode and concatenate clips for compatibility
+    # ========================================
+    # FIXED CONCATENATION - COPIED FROM GLOBAL SCRIPT
+    # ========================================
     print("⚡ Concatenating clips...")
     list_file = Path("list.txt")
+    
+    # CRITICAL FIX: Proper path escaping for FFmpeg
     with open(list_file, "w", encoding="utf-8") as f:
         for c in valid_clips:
-            # Use absolute path without escaping
-            f.write(f"file '{Path(c).absolute()}'\n")
+            # Convert to absolute path and escape properly
+            escaped_path = str(Path(c).absolute()).replace("\\", "/")
+            f.write(f"file '{escaped_path}'\n")
     
     # Check for NVIDIA GPU
     gpu_available = False
@@ -762,8 +767,7 @@ def process_visuals(sentences, audio_path, ass_file, logo_path, output_no_subs, 
     
     visual_output = Path("visual.mp4")
     
-    # CRITICAL FIX: Always re-encode to ensure compatible streams
-    # The concat demuxer + copy can fail with mixed sources
+    # Try GPU concatenation first
     if gpu_available:
         concat_cmd = [
             "ffmpeg", "-y",
@@ -772,12 +776,18 @@ def process_visuals(sentences, audio_path, ass_file, logo_path, output_no_subs, 
             "-i", str(list_file),
             "-c:v", "h264_nvenc",
             "-preset", "p4",
-            "-b:v", "8M",
-            "-pix_fmt", "yuv420p",
-            "-r", "30",
+            "-cq", "23",
             str(visual_output)
         ]
-    else:
+        result = subprocess.run(concat_cmd, capture_output=True, text=True)
+        
+        # If GPU fails, try CPU
+        if result.returncode != 0:
+            print("⚠️ GPU concat failed, trying CPU...")
+            gpu_available = False
+    
+    # CPU concatenation (fallback or direct)
+    if not gpu_available:
         concat_cmd = [
             "ffmpeg", "-y",
             "-f", "concat",
@@ -785,59 +795,33 @@ def process_visuals(sentences, audio_path, ass_file, logo_path, output_no_subs, 
             "-i", str(list_file),
             "-c:v", "libx264",
             "-preset", "fast",
-            "-crf", "23",
-            "-pix_fmt", "yuv420p",
-            "-r", "30",
             str(visual_output)
         ]
+        result = subprocess.run(concat_cmd, capture_output=True, text=True)
     
-    result = subprocess.run(concat_cmd, capture_output=True, text=True)
-    
+    # Validate concatenation result
     if result.returncode != 0:
-        print(f"❌ Concatenation failed, trying fallback method...")
-        print(f"Error details: {result.stderr[-500:]}")
-        
-        # FALLBACK: Use filter_complex instead of concat demuxer
-        # This is more robust but slower
-        inputs = []
-        for c in valid_clips:
-            inputs.extend(["-i", str(c)])
-        
-        n = len(valid_clips)
-        filter_parts = [f"[{i}:v]setpts=PTS-STARTPTS,scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,fps=30[v{i}]" for i in range(n)]
-        concat_filter = ''.join(f"[v{i}]" for i in range(n)) + f"concat=n={n}:v=1:a=0[outv]"
-        
-        fallback_cmd = [
-            "ffmpeg", "-y",
-            *inputs,
-            "-filter_complex", ';'.join(filter_parts) + ';' + concat_filter,
-            "-map", "[outv]",
-            "-c:v", "libx264",
-            "-preset", "fast",
-            "-crf", "23",
-            "-pix_fmt", "yuv420p",
-            str(visual_output)
-        ]
-        
-        result = subprocess.run(fallback_cmd, capture_output=True, text=True)
-        
-        if result.returncode != 0:
-            print(f"❌ Fallback also failed: {result.stderr[-300:]}")
-            return False
-    
-    if not os.path.exists(visual_output) or os.path.getsize(visual_output) < 10000:
-        print("❌ visual.mp4 invalid or too small")
+        print(f"❌ Concatenation failed")
+        print(f"Error: {result.stderr[-500:]}")
         return False
     
-    print(f"✅ Concatenation complete: {os.path.getsize(visual_output) / (1024*1024):.1f}MB")
+    if not os.path.exists(visual_output):
+        print("❌ visual.mp4 not created")
+        return False
     
-    # Create versions
+    file_size = os.path.getsize(visual_output)
+    if file_size < 10000:
+        print(f"❌ visual.mp4 too small: {file_size} bytes")
+        return False
+    
+    print(f"✅ Concatenation complete: {file_size / (1024*1024):.1f}MB")
+    
+    # === REST OF THE FUNCTION CONTINUES (VERSION 1 & 2 RENDERING) ===
     print("📹 Creating final videos...")
     
-    # Escape ASS path for ffmpeg
     ass_path = str(ass_file.absolute()).replace("\\", "/").replace(":", "\\\\:")
     
-    # === VERSION 1: 900p NO SUBTITLES ===
+    # VERSION 1: 900p NO SUBTITLES
     print("\n📹 Version 1: 900p (No Subtitles)")
     update_status(85, "Rendering 900p version...")
     
@@ -881,7 +865,7 @@ def process_visuals(sentences, audio_path, ass_file, logo_path, output_no_subs, 
     file_size_v1 = os.path.getsize(output_no_subs) / (1024*1024)
     print(f"✅ Version 1: {file_size_v1:.1f}MB")
     
-    # === VERSION 2: 1080p WITH SUBTITLES ===
+    # VERSION 2: 1080p WITH SUBTITLES
     print("\n📹 Version 2: 1080p (With Subtitles)")
     update_status(90, "Rendering 1080p with subtitles...")
     
