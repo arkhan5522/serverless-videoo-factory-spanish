@@ -1078,10 +1078,10 @@ try:
     
     # Generate Chatterbox TTS audio
     update_status(20, "🎙️ Generating Spanish TTS with Chatterbox (language_id='es')...")
- update_status(20, "Audio Synthesis...")
-audio_out = TEMP_DIR / "audio.wav"
 
-if clone_voice(text, ref_voice, audio_out):
+        audio_out = TEMP_DIR / "audio.wav"
+ 
+    if clone_voice(text, ref_voice, audio_out):
     update_status(50, "Creating Subtitles...")
     
     # Transcribe
