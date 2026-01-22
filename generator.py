@@ -1,12 +1,11 @@
 """
-AI VIDEO GENERATOR - SPANISH VERSION (COMPLETE FIX)
-===================================================
+AI VIDEO GENERATOR - SPANISH VERSION WITH ASSEMBLY AI (NATURE ONLY - FIXED)
+============================================
 ✅ Chatterbox Multilingual TTS for Spanish audio (language_id="es")
-✅ AssemblyAI for accurate subtitle timing
-✅ Better video clip distribution for long audio
-✅ GPU acceleration
-✅ Pure nature videos
-✅ Google Drive upload
+✅ Assembly AI for accurate subtitle timing
+✅ ONLY nature queries - NO T5, NO translation, NO topic-based queries
+✅ Pure natural greenery scenes
+✅ FIXED: Concatenation issues with robust fallback
 """
 
 import os
@@ -20,7 +19,6 @@ import json
 import concurrent.futures
 import requests
 import wave
-import math
 from pathlib import Path
 
 # ========================================== 
@@ -37,12 +35,14 @@ try:
         "numpy",
         "pillow",
         "chatterbox-tts",
-        "assemblyai"
+        "assemblyai",
+        "pydub",
+        "--quiet"
     ]
     
     for lib in libs:
         try:
-            subprocess.check_call([sys.executable, "-m", "pip", "install", lib, "--quiet"])
+            subprocess.check_call([sys.executable, "-m", "pip", "install", lib])
             print(f"✅ {lib}")
         except Exception as e:
             print(f"⚠️  {lib}: {str(e)[:50]}")
@@ -65,6 +65,7 @@ try:
     print("✅ Chatterbox Multilingual TTS imported successfully")
 except ImportError as e:
     print(f"⚠️ Chatterbox import failed: {e}")
+    print("Will use fallback TTS")
 
 # ========================================== 
 # 2. CONFIGURATION
@@ -110,12 +111,14 @@ if TTS_AVAILABLE:
         print(f"⚠️ Chatterbox loading failed: {e}")
         TTS_AVAILABLE = False
 
+print("🚫 NO T5 Translation Model - Using nature queries only")
 print("🌲 All videos will show pure nature scenes")
 
 # ========================================== 
 # 4. NATURE VIDEO QUERIES (HARDCODED)
 # ========================================== 
 
+# Predefined nature queries - NO humans, NO beaches, NO pools
 NATURE_QUERIES = [
     "forest trees cinematic 4k",
     "mountain landscape nature 4k",
@@ -150,8 +153,9 @@ NATURE_QUERIES = [
 ]
 
 def get_nature_query():
-    """ALWAYS return random nature query"""
+    """ALWAYS return random nature query - ignore Spanish text completely"""
     query = random.choice(NATURE_QUERIES)
+    print(f"    🌲 Using Nature Query: '{query}'")
     return query
 
 # ========================================== 
@@ -229,6 +233,25 @@ def download_asset(path, local):
             return True
     except:
         pass
+    
+    alt_paths = [
+        f"static/{path}",
+        f"uploads/{path}",
+        path.replace("uploads/", "static/"),
+        path.replace("static/", "uploads/")
+    ]
+    
+    for alt_path in alt_paths:
+        try:
+            url = f"https://api.github.com/repos/{repo}/contents/{alt_path}"
+            r = requests.get(url, headers=headers)
+            if r.status_code == 200:
+                with open(local, "wb") as f:
+                    f.write(r.content)
+                return True
+        except:
+            continue
+    
     return False
 
 # ========================================== 
@@ -238,7 +261,7 @@ def download_asset(path, local):
 def generate_spanish_script(topic, minutes):
     """Generate Spanish script using Gemini"""
     words = int(minutes * 180)
-    print(f"Generando guión en español (~{words} palabras)...")
+    print(f"Generating Spanish Script (~{words} words)...")
     random.shuffle(GEMINI_KEYS)
     
     base_instructions = """
@@ -249,14 +272,13 @@ INSTRUCCIONES CRÍTICAS:
 - Tono educativo y apropiado para toda la familia
 - Escribe en un estilo documental profesional
 - Mantén los párrafos cohesivos y fluidos
-- Incluye pausas naturales entre ideas
 """
     
     if minutes > 15:
         chunks = int(minutes / 5)
         full_script = []
         for i in range(chunks):
-            update_status(5+i, f"Escribiendo Parte {i+1}/{chunks}...")
+            update_status(5+i, f"Writing Part {i+1}/{chunks}...")
             context = full_script[-1][-200:] if full_script else 'Comenzar'
             prompt = f"{base_instructions}\nEscribe la Parte {i+1}/{chunks} sobre '{topic}'. Contexto: {context}. Longitud: 700 palabras. Mantén la coherencia con la parte anterior."
             full_script.append(call_gemini(prompt))
@@ -283,313 +305,108 @@ def call_gemini(prompt):
     return "Error en la generación del guión."
 
 # ========================================== 
-# 7. CHATTERBOX TTS AUDIO GENERATION (SPANISH)
+# 7. CHATTERBOX TTS AUDIO GENERATION
 # ========================================== 
 
-def generate_spanish_audio_chatterbox(text, output_path, audio_prompt_path=None):
+def generate_tts_audio_chatterbox(sentences, output_path, audio_prompt_path=None):
     """Generate Spanish TTS audio using Chatterbox"""
     if not TTS_AVAILABLE or TTS_MODEL is None:
         print("⚠️ Chatterbox TTS not available, creating silent audio")
-        return create_silent_audio(text, output_path)
+        return create_silent_audio(sentences, output_path)
     
-    print("🎙️ Generando audio español con Chatterbox TTS (language_id='es')...")
+    print("🎙️ Generating Spanish Audio with Chatterbox TTS (language_id='es')...")
     
     try:
-        # Split into manageable chunks
-        sentences = [s.strip() for s in re.split(r'(?<=[.!?])\s+', text) if len(s.strip()) > 2]
-        
         all_audio_segments = []
-        sample_rate = TTS_MODEL.sr
         
         for i, sent in enumerate(sentences):
-            if i % 10 == 0:
-                update_status(25 + int((i/len(sentences))*15), 
-                            f"Generando audio {i+1}/{len(sentences)}...")
+            text = sent['text'].strip()
             
-            try:
-                if audio_prompt_path and os.path.exists(audio_prompt_path):
-                    wav_audio = TTS_MODEL.generate(
-                        sent, 
-                        language_id="es",
-                        audio_prompt_path=audio_prompt_path
-                    )
-                else:
-                    wav_audio = TTS_MODEL.generate(sent, language_id="es")
-                
-                if wav_audio.dim() == 1:
-                    wav_audio = wav_audio.unsqueeze(0)
-                
-                # Add pause between sentences
-                silence_samples = int(0.3 * sample_rate)
-                silence = torch.zeros((wav_audio.shape[0], silence_samples))
-                segment_with_pause = torch.cat([wav_audio, silence], dim=-1)
-                all_audio_segments.append(segment_with_pause)
-                
-            except Exception as e:
-                print(f"⚠️ TTS error en oración {i}: {e}")
-                continue
+            if audio_prompt_path and os.path.exists(audio_prompt_path):
+                wav_audio = TTS_MODEL.generate(
+                    text, 
+                    language_id="es",
+                    audio_prompt_path=audio_prompt_path
+                )
+            else:
+                wav_audio = TTS_MODEL.generate(text, language_id="es")
+            
+            sample_rate = TTS_MODEL.sr
+            
+            if i == 0:
+                print(f"    🔍 Model sample rate: {sample_rate} Hz")
+            
+            silence_samples = int(0.2 * sample_rate)
+            silence = torch.zeros((wav_audio.shape[0] if wav_audio.dim() > 1 else 1, silence_samples))
+            
+            if wav_audio.dim() == 1:
+                wav_audio = wav_audio.unsqueeze(0)
+            
+            segment_with_pause = torch.cat([wav_audio, silence], dim=-1)
+            all_audio_segments.append(segment_with_pause)
+            
+            if (i + 1) % 10 == 0:
+                print(f"    ✅ Generated {i+1}/{len(sentences)} audio segments")
         
         if all_audio_segments:
-            full_audio = torch.cat(all_audio_segments, dim=-1)
+            max_channels = max(seg.shape[0] if seg.dim() > 1 else 1 for seg in all_audio_segments)
             
-            # Ensure mono audio
-            if full_audio.shape[0] > 1:
-                full_audio = torch.mean(full_audio, dim=0, keepdim=True)
+            processed_segments = []
+            for seg in all_audio_segments:
+                if seg.dim() == 1:
+                    seg = seg.unsqueeze(0)
+                if seg.shape[0] < max_channels:
+                    seg = seg.repeat(max_channels, 1)
+                processed_segments.append(seg)
             
-            # Save audio
-            ta.save(output_path, full_audio, sample_rate)
+            full_audio = torch.cat(processed_segments, dim=-1)
             
-            # Verify duration
+            temp_path = str(output_path).replace('.wav', '_temp.wav')
+            ta.save(temp_path, full_audio, sample_rate)
+            
+            subprocess.run([
+                "ffmpeg", "-y",
+                "-i", temp_path,
+                "-ar", str(sample_rate),
+                "-ac", "1",
+                "-acodec", "pcm_s16le",
+                str(output_path)
+            ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+            
+            try:
+                os.remove(temp_path)
+            except:
+                pass
+            
+            import wave
             with wave.open(str(output_path), 'rb') as wav_file:
-                duration = wav_file.getnframes() / wav_file.getframerate()
-                print(f"✅ Audio generado: {duration:.1f}s, {len(sentences)} oraciones")
+                final_duration = wav_file.getnframes() / wav_file.getframerate()
+                print(f"✅ Spanish TTS audio: {final_duration:.1f}s")
             
             return True
         else:
-            return create_silent_audio(text, output_path)
+            return create_silent_audio(sentences, output_path)
         
     except Exception as e:
         print(f"❌ TTS failed: {e}")
-        return create_silent_audio(text, output_path)
+        return create_silent_audio(sentences, output_path)
 
-def create_silent_audio(text, output_path, duration_seconds=60):
+def create_silent_audio(sentences, output_path):
     """Create silent audio as fallback"""
-    sample_rate = 44100
-    channels = 1
-    with wave.open(str(output_path), 'wb') as wav_file:
-        wav_file.setnchannels(channels)
-        wav_file.setsampwidth(2)
-        wav_file.setframerate(sample_rate)
-        wav_file.writeframes(b'\x00\x00' * int(duration_seconds * sample_rate))
+    total_duration = sentences[-1]['end'] if sentences else 60
     
+    import wave
+    with wave.open(str(output_path), 'wb') as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(24000)
+        wav.writeframes(b'\x00\x00' * int(total_duration * 24000))
+    
+    print(f"⚠️ Silent audio created: {total_duration}s")
     return True
 
 # ========================================== 
-# 8. IMPROVED ASSEMBLYAI TRANSCRIPTION
-# ========================================== 
-
-def transcribe_with_assemblyai_improved(audio_path, audio_duration):
-    """Transcribe audio using AssemblyAI with better sentence splitting"""
-    if not ASSEMBLY_KEY:
-        print("⚠️ AssemblyAI key not found")
-        return None
-    
-    print("🔤 Transcribiendo audio con AssemblyAI...")
-    
-    try:
-        aai.settings.api_key = ASSEMBLY_KEY
-        transcriber = aai.Transcriber()
-        
-        update_status(45, "Transcribiendo audio...")
-        transcript = transcriber.transcribe(str(audio_path))
-        
-        if transcript.status == aai.TranscriptStatus.error:
-            print(f"❌ AssemblyAI error: {transcript.error}")
-            return None
-        
-        # Get words for better splitting
-        words = []
-        if hasattr(transcript, 'words') and transcript.words:
-            words = transcript.words
-        
-        # Calculate optimal sentence count
-        optimal_sentences = max(40, int(audio_duration / 4))  # 1 sentence per 4 seconds, min 40
-        
-        print(f"🎯 Audio: {audio_duration:.1f}s, Objetivo: {optimal_sentences} oraciones")
-        
-        if words:
-            # Use word-level timing for better splitting
-            sentences = split_words_into_sentences(words, optimal_sentences, audio_duration)
-        else:
-            # Fallback to sentence-level
-            sentences = []
-            for sentence in transcript.get_sentences():
-                sentences.append({
-                    "text": sentence.text,
-                    "start": sentence.start / 1000,
-                    "end": sentence.end / 1000
-                })
-            
-            # If too few sentences, split them
-            if len(sentences) < optimal_sentences * 0.5:
-                sentences = split_long_sentences(sentences, optimal_sentences, audio_duration)
-        
-        print(f"✅ Transcripción: {len(sentences)} oraciones")
-        return sentences
-        
-    except Exception as e:
-        print(f"⚠️ AssemblyAI failed: {e}")
-        return None
-
-def split_words_into_sentences(words, target_count, audio_duration):
-    """Split words into optimal sentences"""
-    if not words:
-        return []
-    
-    sentences = []
-    current_text = []
-    current_start = words[0].start / 1000 if hasattr(words[0], 'start') else 0
-    words_per_sentence = max(8, len(words) // target_count)
-    
-    for i, word in enumerate(words):
-        current_text.append(word.text)
-        
-        # Check if we should end sentence
-        should_end = False
-        
-        # Word count check
-        if len(current_text) >= words_per_sentence:
-            should_end = True
-            
-            # Check for natural endings
-            word_text = word.text.lower()
-            if word_text.endswith(('.', '?', '!', ';')):
-                should_end = True
-            elif i < len(words) - 1:
-                next_word = words[i + 1]
-                if hasattr(word, 'end') and hasattr(next_word, 'start'):
-                    pause = (next_word.start - word.end) / 1000
-                    if pause > 0.25:  # 250ms pause
-                        should_end = True
-        
-        # Last word
-        if i == len(words) - 1:
-            should_end = True
-        
-        if should_end and current_text:
-            # Get end time
-            end_time = word.end / 1000 if hasattr(word, 'end') else current_start + 3.0
-            
-            sentences.append({
-                "text": ' '.join(current_text),
-                "start": current_start,
-                "end": end_time
-            })
-            
-            # Reset for next sentence
-            current_text = []
-            if i < len(words) - 1:
-                next_word = words[i + 1]
-                current_start = next_word.start / 1000 if hasattr(next_word, 'start') else end_time
-    
-    # Adjust to match audio duration
-    if sentences:
-        adjust_sentence_timing(sentences, audio_duration)
-    
-    return sentences
-
-def split_long_sentences(sentences, target_count, audio_duration):
-    """Split long sentences into smaller ones"""
-    if len(sentences) >= target_count:
-        return sentences
-    
-    new_sentences = []
-    
-    for sent in sentences:
-        text = sent['text']
-        duration = sent['end'] - sent['start']
-        
-        # If sentence is too long (>7 seconds), split it
-        if duration > 7.0:
-            words = text.split()
-            if len(words) > 15:
-                # Split by commas, conjunctions, etc.
-                parts = re.split(r'(?<=[,;:])\s+', text)
-                if len(parts) > 1:
-                    part_duration = duration / len(parts)
-                    for i, part in enumerate(parts):
-                        new_sentences.append({
-                            "text": part.strip(),
-                            "start": sent['start'] + (i * part_duration),
-                            "end": sent['start'] + ((i + 1) * part_duration)
-                        })
-                    continue
-        
-        new_sentences.append(sent)
-    
-    # If still not enough, do word-based splitting
-    if len(new_sentences) < target_count * 0.7:
-        all_words = ' '.join([s['text'] for s in new_sentences]).split()
-        words_per_sentence = max(8, len(all_words) // target_count)
-        
-        new_sentences = []
-        current_time = 0
-        time_per_sentence = audio_duration / (len(all_words) // words_per_sentence)
-        
-        for i in range(0, len(all_words), words_per_sentence):
-            sentence_words = all_words[i:i + words_per_sentence]
-            if sentence_words:
-                new_sentences.append({
-                    "text": ' '.join(sentence_words),
-                    "start": current_time,
-                    "end": current_time + time_per_sentence
-                })
-                current_time += time_per_sentence
-    
-    adjust_sentence_timing(new_sentences, audio_duration)
-    return new_sentences
-
-def adjust_sentence_timing(sentences, audio_duration):
-    """Adjust sentence timing to match audio duration"""
-    if not sentences:
-        return
-    
-    total_time = sentences[-1]['end']
-    if total_time < audio_duration:
-        # Add time to last sentence
-        sentences[-1]['end'] = audio_duration
-    elif total_time > audio_duration * 1.1:
-        # Scale down
-        scale = audio_duration / total_time
-        for s in sentences:
-            s['start'] *= scale
-            s['end'] *= scale
-
-def create_sentences_fallback(text, audio_duration):
-    """Create sentences when AssemblyAI is not available"""
-    print("📝 Creando oraciones (método alternativo)...")
-    
-    # Split text into sentences
-    raw_sentences = [s.strip() for s in re.split(r'(?<=[.!?])\s+', text) if len(s.strip()) > 2]
-    
-    # Calculate optimal count
-    target_sentences = max(40, int(audio_duration / 4))
-    
-    # If too few sentences, split further
-    if len(raw_sentences) < target_sentences * 0.7:
-        all_words = text.split()
-        words_per_sentence = max(8, len(all_words) // target_sentences)
-        
-        raw_sentences = []
-        for i in range(0, len(all_words), words_per_sentence):
-            sentence_words = all_words[i:i + words_per_sentence]
-            if sentence_words:
-                raw_sentences.append(' '.join(sentence_words))
-    
-    # Create timed sentences
-    sentences = []
-    total_words = len(text.split())
-    words_per_second = total_words / audio_duration if audio_duration > 0 else 3
-    
-    current_time = 0
-    for sent in raw_sentences:
-        word_count = len(sent.split())
-        duration = max(2.0, min(7.0, word_count / words_per_second))
-        
-        sentences.append({
-            "text": sent,
-            "start": current_time,
-            "end": current_time + duration
-        })
-        
-        current_time += duration + 0.3  # Add pause
-    
-    adjust_sentence_timing(sentences, audio_duration)
-    print(f"✅ {len(sentences)} oraciones creadas")
-    return sentences
-
-# ========================================== 
-# 9. SUBTITLE SYSTEM
+# 8. ASSEMBLY AI SUBTITLE SYSTEM
 # ========================================== 
 
 SUBTITLE_STYLES = {
@@ -627,12 +444,56 @@ SUBTITLE_STYLES = {
     }
 }
 
-def create_ass_file(sentences, ass_file):
-    """Create ASS subtitle file with proper format"""
+def transcribe_audio_with_assemblyai(audio_path):
+    """Transcribe audio using Assembly AI for accurate timing"""
+    print("🔍 Transcribing audio with Assembly AI...")
+    
+    if not ASSEMBLY_KEY:
+        print("⚠️ No Assembly AI API key found, using fallback timing")
+        return None
+    
+    try:
+        aai.settings.api_key = ASSEMBLY_KEY
+        transcriber = aai.Transcriber()
+        
+        config = aai.TranscriptionConfig(
+            language_code="es",  # Spanish language
+            speaker_labels=True,
+            punctuate=True,
+            format_text=True
+        )
+        
+        transcript = transcriber.transcribe(str(audio_path), config=config)
+        
+        if transcript.status == aai.TranscriptStatus.error:
+            print(f"❌ Assembly AI error: {transcript.error}")
+            return None
+        
+        sentences = []
+        for sentence in transcript.get_sentences():
+            sentences.append({
+                "text": sentence.text,
+                "start": sentence.start / 1000,  # Convert ms to seconds
+                "end": sentence.end / 1000
+            })
+        
+        if sentences:
+            # Add small pause at the end
+            sentences[-1]['end'] += 1.0
+            print(f"✅ Assembly AI transcription: {len(sentences)} sentences")
+            return sentences
+        
+    except Exception as e:
+        print(f"⚠️ Assembly AI failed: {e}")
+    
+    return None
+
+def create_ass_file_from_transcript(sentences, ass_file):
+    """Create ASS subtitle file from Assembly AI transcript"""
     style_key = random.choice(list(SUBTITLE_STYLES.keys()))
     style = SUBTITLE_STYLES[style_key]
     
-    print(f"✨ Usando estilo de subtítulos: {style['name']}")
+    print(f"✨ Using Subtitle Style: {style['name']}")
     
     with open(ass_file, "w", encoding="utf-8-sig") as f:
         f.write("[Script Info]\n")
@@ -653,36 +514,32 @@ def create_ass_file(sentences, ass_file):
         for s in sentences:
             start_time = format_ass_time(s['start'])
             end_time = format_ass_time(s['end'])
+            text = s['text'].strip().replace('\\', '\\\\').replace('\n', ' ')
             
-            text = s['text'].strip()
-            text = text.replace('\\', '\\\\').replace('\n', ' ')
-            
-            # Clean up punctuation
-            if text.endswith('.') or text.endswith(','):
+            # Clean up punctuation at the end
+            if text.endswith('.'):
+                text = text[:-1]
+            if text.endswith(','):
                 text = text[:-1]
             
-            # Split into lines (max 35 characters per line)
-            MAX_CHARS = 35
             words = text.split()
             lines = []
             current_line = []
             current_length = 0
             
             for word in words:
-                word_length = len(word) + 1
-                if current_length + word_length > MAX_CHARS and current_line:
+                if current_length + len(word) + 1 > 35 and current_line:
                     lines.append(' '.join(current_line))
                     current_line = [word]
-                    current_length = word_length
+                    current_length = len(word)
                 else:
                     current_line.append(word)
-                    current_length += word_length
+                    current_length += len(word) + 1
             
             if current_line:
                 lines.append(' '.join(current_line))
             
             formatted_text = '\\N'.join(lines)
-            
             f.write(f"Dialogue: 0,{start_time},{end_time},Default,,0,0,0,,{formatted_text}\n")
 
 def format_ass_time(seconds):
@@ -694,17 +551,20 @@ def format_ass_time(seconds):
     return f"{h}:{m:02d}:{s:02d}.{cs:02d}"
 
 # ========================================== 
-# 10. VIDEO SEARCH & PROCESSING
+# 9. VIDEO SEARCH (NATURE ONLY - NO T5)
 # ========================================== 
 
 USED_VIDEO_URLS = set()
 
-def search_videos_nature_only():
-    """Search for nature videos"""
-    query = get_nature_query()
-    return search_videos_by_query(query)
+def search_videos_nature_only(clip_index):
+    """
+    CRITICAL: ALWAYS use nature queries - IGNORE Spanish text completely
+    NO T5, NO translation, NO topic analysis
+    """
+    query = get_nature_query()  # Get random nature query
+    return search_videos_by_query(query, clip_index)
 
-def search_videos_by_query(query, page=None):
+def search_videos_by_query(query, clip_index, page=None):
     """Search Pexels and Pixabay"""
     if page is None:
         page = random.randint(1, 3)
@@ -842,6 +702,7 @@ def download_and_process_video(results, target_duration, clip_index):
                 
                 if os.path.exists(output_path):
                     USED_VIDEO_URLS.add(result['url'])
+                    print(f"    ✓ {result['service']} video")
                     return str(output_path)
                     
         except Exception as e:
@@ -850,79 +711,50 @@ def download_and_process_video(results, target_duration, clip_index):
     
     return None
 
-# ========================================== 
-# 11. IMPROVED VISUAL PROCESSING
-# ========================================== 
+def process_single_clip(args):
+    """
+    Process single clip - ALWAYS use nature queries
+    NO analysis of Spanish text
+    """
+    i, sent, sentences_count = args
+    
+    duration = max(3.5, sent['end'] - sent['start'])
+    
+    print(f"  🌲 Clip {i+1}/{sentences_count}: Nature Scene (ignoring text)")
+    
+    for attempt in range(1, 7):
+        print(f"    Attempt {attempt}: Nature Query Only")
+        
+        # ALWAYS use nature queries - NEVER analyze Spanish text
+        results = search_videos_nature_only(i)
+        
+        if results:
+            clip_path = download_and_process_video(results, duration, i)
+            if clip_path:
+                print(f"    ✅ Success")
+                return (i, clip_path)
+        
+        time.sleep(0.5)
+    
+    print(f"    ❌ Failed")
+    return (i, None)
 
-def calculate_video_clips_needed(audio_duration, sentences):
-    """Calculate how many video clips we need based on audio duration"""
-    # For long audio, we need more video clips than sentences
-    # Target: 1 video clip per 8-12 seconds of audio
-    target_clip_count = max(30, int(audio_duration / 10))
+def process_visuals(sentences, audio_path, ass_file, logo_path, output_no_subs, output_with_subs):
+    """Process visuals with FIXED concatenation logic"""
+    print("🎬 Processing Visuals - NATURE ONLY...")
+    print("🌲 All videos will be nature scenes regardless of Spanish text")
     
-    # But ensure we have at least as many clips as sentences
-    target_clip_count = max(target_clip_count, len(sentences))
-    
-    # Cap at reasonable number
-    target_clip_count = min(150, target_clip_count)
-    
-    print(f"🎬 Audio: {audio_duration:.1f}s, Objetivo: {target_clip_count} clips de video")
-    
-    # Calculate clip durations
-    if target_clip_count > len(sentences):
-        # We need more clips than sentences
-        # Create clip segments independent of sentences
-        clip_durations = []
-        remaining_time = audio_duration
-        
-        while remaining_time > 0:
-            # Variable clip duration: 5-12 seconds
-            clip_duration = random.uniform(5.0, 12.0)
-            if clip_duration > remaining_time:
-                clip_duration = remaining_time
-            
-            clip_durations.append(clip_duration)
-            remaining_time -= clip_duration
-        
-        # Adjust to match exact audio duration
-        total_clip_time = sum(clip_durations)
-        if total_clip_time != audio_duration:
-            scale = audio_duration / total_clip_time
-            clip_durations = [d * scale for d in clip_durations]
-        
-        return clip_durations
-    
-    else:
-        # Use sentence durations
-        clip_durations = []
-        for sent in sentences:
-            duration = sent['end'] - sent['start']
-            # If sentence is too long, split it for video purposes
-            if duration > 15:
-                # Split into 2-3 clips
-                num_parts = min(3, int(duration / 7) + 1)
-                part_duration = duration / num_parts
-                for _ in range(num_parts):
-                    clip_durations.append(part_duration)
-            else:
-                clip_durations.append(duration)
-        
-        return clip_durations
-
-def process_video_clips(clip_durations):
-    """Process all video clips in parallel"""
-    print(f"🌲 Procesando {len(clip_durations)} clips de naturaleza...")
-    
-    clip_args = [(i, duration, len(clip_durations)) for i, duration in enumerate(clip_durations)]
-    clips = [None] * len(clip_durations)
+    clip_args = [(i, sent, len(sentences)) for i, sent in enumerate(sentences)]
+    clips = [None] * len(sentences)
     
     with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
         future_to_index = {
-            executor.submit(process_single_video_clip, arg): arg[0] 
+            executor.submit(process_single_clip, arg): arg[0] 
             for arg in clip_args
         }
         
         completed = 0
+        failed_clips = []
         
         for future in concurrent.futures.as_completed(future_to_index):
             try:
@@ -931,66 +763,60 @@ def process_video_clips(clip_durations):
                 if clip_path:
                     clips[index] = clip_path
                     completed += 1
+                else:
+                    failed_clips.append(index)
                 
-                progress = 60 + int((completed/len(clip_durations))*25)
-                update_status(progress, f"Completados {completed}/{len(clip_durations)} clips")
+                update_status(60 + int((completed/len(sentences))*25), f"Completed {completed}/{len(sentences)}")
                 
             except Exception as e:
                 index = future_to_index[future]
-                print(f"❌ Error en clip {index}: {e}")
+                failed_clips.append(index)
     
-    return clips
-
-def process_single_video_clip(args):
-    """Process single video clip"""
-    i, duration, total_clips = args
+    # Create green backgrounds for failed clips
+    if failed_clips:
+        print(f"⚠️ Creating green backgrounds for {len(failed_clips)} clips")
+        for idx in failed_clips:
+            if idx < len(sentences):
+                duration = max(3.5, sentences[idx]['end'] - sentences[idx]['start'])
+                color_path = TEMP_DIR / f"color_{idx}.mp4"
+                colors = ["0x2E7D32", "0x388E3C", "0x43A047"]
+                
+                subprocess.run([
+                    "ffmpeg", "-y", "-f", "lavfi",
+                    "-i", f"color=c={colors[idx % 3]}:s=1920x1080:d={duration}",
+                    "-c:v", "libx264", "-pix_fmt", "yuv420p",
+                    str(color_path)
+                ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                
+                if os.path.exists(color_path):
+                    clips[idx] = str(color_path)
     
-    print(f"  📹 Clip {i+1}/{total_clips}: {duration:.1f}s")
+    # Filter valid clips
+    valid_clips = []
+    for c in clips:
+        if c and os.path.exists(c) and os.path.getsize(c) > 1000:
+            valid_clips.append(c)
     
-    for attempt in range(1, 5):
-        results = search_videos_nature_only()
-        
-        if results:
-            clip_path = download_and_process_video(results, duration, i)
-            if clip_path:
-                print(f"    ✅ Éxito (intento {attempt})")
-                return (i, clip_path)
-        
-        time.sleep(0.5)
+    if not valid_clips:
+        print("❌ No valid clips generated")
+        return False
     
-    print(f"    ❌ Falló después de 4 intentos")
-    return (i, None)
-
-def create_fallback_clips(clip_durations, failed_indices):
-    """Create fallback clips for failed downloads"""
-    for idx in failed_indices:
-        if idx < len(clip_durations):
-            duration = clip_durations[idx]
-            color_path = TEMP_DIR / f"color_{idx}.mp4"
-            colors = ["0x2E7D32", "0x388E3C", "0x43A047"]
-            
-            subprocess.run([
-                "ffmpeg", "-y", "-f", "lavfi",
-                "-i", f"color=c={colors[idx % 3]}:s=1920x1080:d={duration}",
-                "-c:v", "libx264", "-pix_fmt", "yuv420p",
-                str(color_path)
-            ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            
-            if os.path.exists(color_path):
-                yield str(color_path)
-
-def concatenate_videos(video_files, output_path):
-    """Concatenate video files"""
-    print("🔗 Concatenando videos...")
+    print(f"✅ Valid clips: {len(valid_clips)}/{len(sentences)}")
     
-    list_file = TEMP_DIR / "concat_list.txt"
+    # ========================================
+    # FIXED CONCATENATION - COPIED FROM GLOBAL SCRIPT
+    # ========================================
+    print("⚡ Concatenating clips...")
+    list_file = Path("list.txt")
+    
+    # CRITICAL FIX: Proper path escaping for FFmpeg
     with open(list_file, "w", encoding="utf-8") as f:
-        for vfile in video_files:
-            if vfile and os.path.exists(vfile):
-                escaped_path = str(Path(vfile).absolute()).replace("\\", "/")
-                f.write(f"file '{escaped_path}'\n")
+        for c in valid_clips:
+            # Convert to absolute path and escape properly
+            escaped_path = str(Path(c).absolute()).replace("\\", "/")
+            f.write(f"file '{escaped_path}'\n")
     
-    # Check for GPU
+    # Check for NVIDIA GPU
     gpu_available = False
     try:
         result = subprocess.run(["nvidia-smi"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -998,8 +824,11 @@ def concatenate_videos(video_files, output_path):
     except:
         pass
     
+    visual_output = Path("visual.mp4")
+    
+    # Try GPU concatenation first
     if gpu_available:
-        cmd = [
+        concat_cmd = [
             "ffmpeg", "-y",
             "-f", "concat",
             "-safe", "0",
@@ -1007,161 +836,149 @@ def concatenate_videos(video_files, output_path):
             "-c:v", "h264_nvenc",
             "-preset", "p4",
             "-cq", "23",
-            str(output_path)
+            str(visual_output)
         ]
-    else:
-        cmd = [
+        result = subprocess.run(concat_cmd, capture_output=True, text=True)
+        
+        # If GPU fails, try CPU
+        if result.returncode != 0:
+            print("⚠️ GPU concat failed, trying CPU...")
+            gpu_available = False
+    
+    # CPU concatenation (fallback or direct)
+    if not gpu_available:
+        concat_cmd = [
             "ffmpeg", "-y",
             "-f", "concat",
             "-safe", "0",
             "-i", str(list_file),
             "-c:v", "libx264",
             "-preset", "fast",
-            "-crf", "23",
-            str(output_path)
+            str(visual_output)
         ]
+        result = subprocess.run(concat_cmd, capture_output=True, text=True)
     
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    
+    # Validate concatenation result
     if result.returncode != 0:
-        print(f"❌ Concatenation failed: {result.stderr[-500:]}")
+        print(f"❌ Concatenation failed")
+        print(f"Error: {result.stderr[-500:]}")
         return False
     
-    if not os.path.exists(output_path):
-        print("❌ Output file not created")
+    if not os.path.exists(visual_output):
+        print("❌ visual.mp4 not created")
         return False
     
-    file_size = os.path.getsize(output_path)
-    print(f"✅ Concatenación completa: {file_size / (1024*1024):.1f}MB")
+    file_size = os.path.getsize(visual_output)
+    if file_size < 10000:
+        print(f"❌ visual.mp4 too small: {file_size} bytes")
+        return False
     
-    # Cleanup
-    if list_file.exists():
-        list_file.unlink()
+    print(f"✅ Concatenation complete: {file_size / (1024*1024):.1f}MB")
     
-    return True
-
-# ========================================== 
-# 12. FINAL VIDEO RENDERING
-# ========================================== 
-
-def render_final_videos(visual_path, audio_path, ass_file, logo_path, 
-                       output_no_subs, output_with_subs):
-    """Render final videos"""
-    print("🎬 Renderizando videos finales...")
+    # === REST OF THE FUNCTION CONTINUES (VERSION 1 & 2 RENDERING) ===
+    print("📹 Creating final videos...")
+    
+    ass_path = str(ass_file.absolute()).replace("\\", "/").replace(":", "\\\\:")
     
     # VERSION 1: 900p NO SUBTITLES
-    print("\n📹 Versión 1: 900p (Sin subtítulos)")
-    update_status(85, "Renderizando versión 900p...")
+    print("\n📹 Version 1: 900p (No Subtitles)")
+    update_status(85, "Rendering 900p version...")
     
     if logo_path and os.path.exists(logo_path):
+        filter_v1 = f"[0:v]scale=1600:900:force_original_aspect_ratio=decrease,pad=1600:900:(ow-iw)/2:(oh-ih)/2[bg];[1:v]scale=200:-1[logo];[bg][logo]overlay=25:25[v]"
         cmd_v1 = [
             "ffmpeg", "-y",
-            "-i", str(visual_path),
-            "-i", str(logo_path),
-            "-i", str(audio_path),
-            "-filter_complex", "[0:v]scale=1600:900:force_original_aspect_ratio=decrease,pad=1600:900:(ow-iw)/2:(oh-ih)/2[bg];[1:v]scale=200:-1[logo];[bg][logo]overlay=25:25",
-            "-c:v", "libx264",
-            "-preset", "fast",
-            "-crf", "23",
-            "-c:a", "aac",
-            "-b:a", "128k",
-            "-shortest",
-            str(output_no_subs)
+            "-i", str(visual_output), "-i", str(logo_path), "-i", str(audio_path),
+            "-filter_complex", filter_v1,
+            "-map", "[v]", "-map", "2:a"
         ]
     else:
         cmd_v1 = [
             "ffmpeg", "-y",
-            "-i", str(visual_path),
-            "-i", str(audio_path),
+            "-i", str(visual_output), "-i", str(audio_path),
             "-vf", "scale=1600:900:force_original_aspect_ratio=decrease,pad=1600:900:(ow-iw)/2:(oh-ih)/2",
-            "-c:v", "libx264",
-            "-preset", "fast",
-            "-crf", "23",
-            "-c:a", "aac",
-            "-b:a", "128k",
-            "-shortest",
-            str(output_no_subs)
+            "-map", "0:v", "-map", "1:a"
         ]
     
-    result_v1 = subprocess.run(cmd_v1, capture_output=True, text=True, timeout=300)
+    if gpu_available:
+        cmd_v1.extend(["-c:v", "h264_nvenc", "-preset", "p4", "-b:v", "6M"])
+    else:
+        cmd_v1.extend(["-c:v", "libx264", "-preset", "fast", "-crf", "23"])
+    
+    cmd_v1.extend([
+        "-c:a", "aac", "-b:a", "128k",
+        "-shortest",
+        str(output_no_subs)
+    ])
+    
+    result_v1 = subprocess.run(cmd_v1, capture_output=True, text=True)
     
     if result_v1.returncode != 0:
-        print(f"❌ Versión 1 falló: {result_v1.stderr[-300:]}")
+        print(f"❌ Version 1 failed: {result_v1.stderr[-300:]}")
         return False
     
     if not os.path.exists(output_no_subs) or os.path.getsize(output_no_subs) < 100000:
-        print("❌ Salida de versión 1 inválida")
+        print("❌ Version 1 output invalid")
         return False
     
     file_size_v1 = os.path.getsize(output_no_subs) / (1024*1024)
-    print(f"✅ Versión 1: {file_size_v1:.1f}MB")
+    print(f"✅ Version 1: {file_size_v1:.1f}MB")
     
     # VERSION 2: 1080p WITH SUBTITLES
-    print("\n📹 Versión 2: 1080p (Con subtítulos)")
-    update_status(90, "Renderizando versión 1080p con subtítulos...")
-    
-    # Escape ASS path
-    ass_path = str(ass_file.absolute()).replace("\\", "/").replace(":", "\\\\:")
+    print("\n📹 Version 2: 1080p (With Subtitles)")
+    update_status(90, "Rendering 1080p with subtitles...")
     
     if logo_path and os.path.exists(logo_path):
-        filter_v2 = f"[0:v]scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2[bg];[1:v]scale=230:-1[logo];[bg][logo]overlay=30:30[withlogo];[withlogo]subtitles='{ass_path}'"
+        filter_v2 = f"[0:v]scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2[bg];[1:v]scale=230:-1[logo];[bg][logo]overlay=30:30[withlogo];[withlogo]subtitles='{ass_path}'[v]"
         cmd_v2 = [
             "ffmpeg", "-y",
-            "-i", str(visual_path),
-            "-i", str(logo_path),
-            "-i", str(audio_path),
+            "-i", str(visual_output), "-i", str(logo_path), "-i", str(audio_path),
             "-filter_complex", filter_v2,
-            "-c:v", "libx264",
-            "-preset", "fast",
-            "-crf", "20",
-            "-c:a", "aac",
-            "-b:a", "256k",
-            "-shortest",
-            str(output_with_subs)
+            "-map", "[v]", "-map", "2:a"
         ]
     else:
-        filter_v2 = f"[0:v]scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2[bg];[bg]subtitles='{ass_path}'"
+        filter_v2 = f"[0:v]scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2[bg];[bg]subtitles='{ass_path}'[v]"
         cmd_v2 = [
             "ffmpeg", "-y",
-            "-i", str(visual_path),
-            "-i", str(audio_path),
+            "-i", str(visual_output), "-i", str(audio_path),
             "-filter_complex", filter_v2,
-            "-c:v", "libx264",
-            "-preset", "fast",
-            "-crf", "20",
-            "-c:a", "aac",
-            "-b:a", "256k",
-            "-shortest",
-            str(output_with_subs)
+            "-map", "[v]", "-map", "1:a"
         ]
     
-    result_v2 = subprocess.run(cmd_v2, capture_output=True, text=True, timeout=300)
+    if gpu_available:
+        cmd_v2.extend(["-c:v", "h264_nvenc", "-preset", "p4", "-b:v", "12M"])
+    else:
+        cmd_v2.extend(["-c:v", "libx264", "-preset", "fast", "-crf", "20"])
+    
+    cmd_v2.extend([
+        "-c:a", "aac", "-b:a", "256k",
+        "-shortest",
+        str(output_with_subs)
+    ])
+    
+    result_v2 = subprocess.run(cmd_v2, capture_output=True, text=True)
     
     if result_v2.returncode != 0:
-        print(f"⚠️ Versión 2 falló: {result_v2.stderr[-300:]}")
-        print("Continuando solo con versión 1...")
+        print(f"⚠️ Version 2 failed: {result_v2.stderr[-300:]}")
+        print("Continuing with Version 1 only...")
         return True
     
     if not os.path.exists(output_with_subs) or os.path.getsize(output_with_subs) < 100000:
-        print("⚠️ Salida de versión 2 inválida")
+        print("⚠️ Version 2 output invalid")
         return True
     
     file_size_v2 = os.path.getsize(output_with_subs) / (1024*1024)
-    print(f"✅ Versión 2: {file_size_v2:.1f}MB")
+    print(f"✅ Version 2: {file_size_v2:.1f}MB")
     
     return True
-
-# ========================================== 
-# 13. GOOGLE DRIVE UPLOAD
-# ========================================== 
 
 def upload_to_google_drive(file_path):
     """Upload to Google Drive"""
     if not os.path.exists(file_path):
-        print(f"❌ Archivo no encontrado: {file_path}")
+        print(f"❌ File not found: {file_path}")
         return None
     
-    print(f"☁️ Subiendo {os.path.basename(file_path)}...")
+    print(f"☁️ Uploading {os.path.basename(file_path)}...")
     
     client_id = os.environ.get("OAUTH_CLIENT_ID")
     client_secret = os.environ.get("OAUTH_CLIENT_SECRET")
@@ -1169,7 +986,7 @@ def upload_to_google_drive(file_path):
     folder_id = os.environ.get("GOOGLE_DRIVE_FOLDER_ID")
     
     if not all([client_id, client_secret, refresh_token]):
-        print("❌ Credenciales OAuth faltantes")
+        print("❌ Missing OAuth credentials")
         return None
     
     try:
@@ -1206,7 +1023,7 @@ def upload_to_google_drive(file_path):
         )
         
         if response.status_code != 200:
-            print(f"❌ Inicio fallido: {response.text}")
+            print(f"❌ Init failed: {response.text}")
             return None
         
         session_uri = response.headers.get("Location")
@@ -1226,36 +1043,40 @@ def upload_to_google_drive(file_path):
             )
             
             link = f"https://drive.google.com/file/d/{file_id}/view"
-            print(f"✅ Subido: {link}")
+            print(f"✅ Uploaded: {link}")
             return link
         else:
-            print(f"❌ Subida fallida: {upload_resp.text}")
+            print(f"❌ Upload failed: {upload_resp.text}")
             return None
             
     except Exception as e:
-        print(f"❌ Error de subida: {e}")
+        print(f"❌ Upload error: {e}")
         return None
 
 # ========================================== 
-# 14. MAIN EXECUTION
+# MAIN EXECUTION
 # ========================================== 
 
 print("\n" + "="*60)
-print("🎬 GENERADOR DE VIDEOS EN ESPAÑOL")
-print("✅ Chatterbox TTS Español (language_id='es')")
-print("🔤 AssemblyAI para subtítulos")
-print("🌲 Videos de naturaleza pura")
+print("🎬 SPANISH VIDEO GENERATOR - NATURE ONLY WITH ASSEMBLY AI")
+print("✅ Chatterbox Multilingual TTS (language_id='es')")
+print("🔍 Assembly AI for accurate Spanish subtitles")
+print("🌲 Pure Nature Videos (No Humans, No Beaches)")
+print("🚫 NO T5, NO Translation - Direct Nature Queries")
 print("="*60)
 
 try:
-    update_status(1, "Inicializando...")
+    update_status(1, "Initializing...")
     
-    # Download assets
+    # Download voice reference
     ref_voice = TEMP_DIR / "voice_ref.mp3"
     if not download_asset(VOICE_PATH, ref_voice):
-        print("⚠️ Descarga de voz fallida, usando voz por defecto")
+        print("⚠️ Voice download failed, will use default voice")
         ref_voice = None
+    else:
+        print(f"✅ Voice: {os.path.getsize(ref_voice)} bytes")
     
+    # Download logo
     ref_logo = None
     if LOGO_PATH and LOGO_PATH != "None":
         ref_logo = TEMP_DIR / "logo.png"
@@ -1263,87 +1084,115 @@ try:
             ref_logo = None
     
     # Generate script
-    update_status(10, "Generando guión...")
+    update_status(10, "Generating Spanish script...")
     
     if MODE == "topic":
         script_text = generate_spanish_script(TOPIC, DURATION_MINS)
     else:
         script_text = SCRIPT_TEXT
     
-    print(f"📝 Guión: {len(script_text)} caracteres")
+    print(f"📝 Script: {len(script_text)} chars")
     
-    # Generate audio
-    update_status(20, "Generando audio español...")
+    # Create temporary script sentences for audio generation
+    update_status(15, "Processing sentences for audio...")
+    sentences_list = [s.strip() for s in re.split(r'(?<=[.!?])\s+', script_text) if len(s.strip()) > 2]
+    
+    if not sentences_list:
+        raise Exception("No valid sentences")
+    
+    # Create temporary timing for audio generation
+    total_duration = DURATION_MINS * 60
+    temp_sentences = []
+    current_time = 0
+    sentence_duration = total_duration / len(sentences_list)
+    
+    for text in sentences_list:
+        duration = sentence_duration * (0.8 + random.random() * 0.4)
+        temp_sentences.append({
+            "text": text,
+            "start": current_time,
+            "end": current_time + duration
+        })
+        current_time += duration
+    
+    if temp_sentences:
+        temp_sentences[-1]['end'] = total_duration
+    
+    print(f"📊 Sentences for audio: {len(temp_sentences)}")
+    
+    # Generate Chatterbox TTS audio
+    update_status(20, "🎙️ Generating Spanish TTS with Chatterbox (language_id='es')...")
     audio_file = TEMP_DIR / "audio.wav"
     
-    if generate_spanish_audio_chatterbox(script_text, audio_file, ref_voice):
-        # Get audio duration
+    # Use voice reference if available for voice cloning
+    if ref_voice and os.path.exists(ref_voice):
+        generate_tts_audio_chatterbox(temp_sentences, audio_file, audio_prompt_path=str(ref_voice))
+    else:
+        generate_tts_audio_chatterbox(temp_sentences, audio_file)
+    
+    if not os.path.exists(audio_file):
+        raise Exception("Audio generation failed")
+    
+    print(f"✅ Audio: {os.path.getsize(audio_file)} bytes")
+    
+    # ==========================================
+    # ASSEMBLY AI SECTION - EXTRACTED FROM ENGLISH SCRIPT
+    # ==========================================
+    update_status(30, "🔍 Transcribing audio with Assembly AI for accurate Spanish subtitles...")
+    
+    # Transcribe audio with Assembly AI
+    assembly_sentences = transcribe_audio_with_assemblyai(audio_file)
+    
+    # Fallback to manual timing if Assembly AI fails
+    if not assembly_sentences:
+        print("⚠️ Using fallback timing (Assembly AI unavailable)")
+        
+        # Calculate timing from audio file
         with wave.open(str(audio_file), 'rb') as wav_file:
-            audio_duration = wav_file.getnframes() / wav_file.getframerate()
+            total_audio_duration = wav_file.getnframes() / wav_file.getframerate()
         
-        print(f"🎵 Duración del audio: {audio_duration:.1f}s")
+        words = script_text.split()
+        words_per_sec = len(words) / total_audio_duration
+        assembly_sentences = []
+        current_time = 0
         
-        # Create subtitles
-        update_status(45, "Creando subtítulos...")
+        # Create sentences with proper timing
+        word_index = 0
+        for sent_text in sentences_list:
+            word_count = len(sent_text.split())
+            duration = word_count / words_per_sec
+            assembly_sentences.append({
+                "text": sent_text,
+                "start": current_time,
+                "end": current_time + duration
+            })
+            current_time += duration
+            word_index += word_count
         
-        sentences = None
-        
-        # Try AssemblyAI first
-        if ASSEMBLY_KEY:
-            sentences = transcribe_with_assemblyai_improved(audio_file, audio_duration)
-        
-        # Fallback if AssemblyAI fails
-        if not sentences:
-            sentences = create_sentences_fallback(script_text, audio_duration)
-        
-        if not sentences or len(sentences) < 10:
-            raise Exception("No se pudieron crear suficientes subtítulos")
-        
-        print(f"✅ {len(sentences)} oraciones para subtítulos")
-        
-        # Create ASS subtitle file
-        ass_file = TEMP_DIR / "subs.ass"
-        create_ass_file(sentences, ass_file)
-        
-        # Calculate video clips needed
-        update_status(55, "Calculando clips de video...")
-        clip_durations = calculate_video_clips_needed(audio_duration, sentences)
-        
-        # Process video clips
-        update_status(60, "🌲 Procesando videos de naturaleza...")
-        clips = process_video_clips(clip_durations)
-        
-        # Filter valid clips
-        valid_clips = [c for c in clips if c and os.path.exists(c)]
-        
-        # Create fallback for failed clips
-        failed_indices = [i for i, c in enumerate(clips) if c is None]
-        if failed_indices:
-            print(f"⚠️ Creando clips de respaldo para {len(failed_indices)} fallos")
-            fallback_clips = list(create_fallback_clips(clip_durations, failed_indices))
-            valid_clips.extend(fallback_clips)
-        
-        if not valid_clips:
-            raise Exception("No se generaron clips de video")
-        
-        print(f"✅ {len(valid_clips)} clips de video listos")
-        
-        # Concatenate videos
-        visual_output = TEMP_DIR / "visual.mp4"
-        if not concatenate_videos(valid_clips, visual_output):
-            raise Exception("Error al concatenar videos")
-        
-        # Render final videos
-        update_status(85, "Renderizando videos finales...")
-        output_no_subs = OUTPUT_DIR / f"spanish_{JOB_ID}_no_subs.mp4"
-        output_with_subs = OUTPUT_DIR / f"spanish_{JOB_ID}_with_subs.mp4"
-        
-        if not render_final_videos(visual_output, audio_file, ass_file, ref_logo, 
-                                 output_no_subs, output_with_subs):
-            raise Exception("Error al renderizar videos finales")
+        if assembly_sentences:
+            # Adjust to match audio duration
+            total_timed = assembly_sentences[-1]['end']
+            if total_timed > 0:
+                scale_factor = total_audio_duration / total_timed
+                for sent in assembly_sentences:
+                    sent['start'] *= scale_factor
+                    sent['end'] *= scale_factor
+    
+    # Create subtitles using Assembly AI transcription
+    update_status(35, "Creating Spanish subtitles with accurate timing...")
+    ass_file = TEMP_DIR / "subtitles.ass"
+    create_ass_file_from_transcript(assembly_sentences, ass_file)
+    
+    # Process visuals with nature queries only
+    update_status(40, "🌲 Processing nature visuals (ignoring text content)...")
+    output_no_subs = OUTPUT_DIR / f"spanish_{JOB_ID}_no_subs.mp4"
+    output_with_subs = OUTPUT_DIR / f"spanish_{JOB_ID}_with_subs.mp4"
+    
+    # Use Assembly AI sentences for video timing
+    if process_visuals(assembly_sentences, audio_file, ass_file, ref_logo, output_no_subs, output_with_subs):
         
         # Upload to Google Drive
-        update_status(95, "Subiendo a Google Drive...")
+        update_status(95, "☁️ Uploading to Google Drive...")
         
         links = {}
         if os.path.exists(output_no_subs):
@@ -1352,20 +1201,28 @@ try:
             links['with_subs'] = upload_to_google_drive(output_with_subs)
         
         # Final status
-        final_msg = "✅ ¡Video en Español Completado!\n"
-        final_msg += f"🎵 Duración: {audio_duration:.1f}s\n"
-        final_msg += f"📝 Oraciones: {len(sentences)}\n"
-        final_msg += f"🎬 Clips: {len(valid_clips)}\n"
+        final_msg = "✅ Spanish Nature Video Complete!\n"
+        final_msg += "🎙️ Chatterbox Spanish TTS (language_id='es')\n"
+        final_msg += "🔍 Assembly AI for accurate Spanish subtitles\n"
+        final_msg += "🌲 Pure Nature Videos (No Humans)\n"
+        final_msg += "🚫 NO T5/Translation Used\n"
         if links.get('no_subs'):
-            final_msg += f"📹 Sin Subs: {links['no_subs']}\n"
+            final_msg += f"📹 No Subs: {links['no_subs']}\n"
         if links.get('with_subs'):
-            final_msg += f"📹 Con Subs: {links['with_subs']}"
+            final_msg += f"📹 With Subs: {links['with_subs']}"
         
         update_status(100, final_msg, "completed", links.get('no_subs') or links.get('with_subs'))
-        print(f"\n🎉 {final_msg}")
+        
+        print("\n🎉 SUCCESS!")
+        print(f"Script: {len(script_text)} chars")
+        print(f"Sentences (Assembly AI): {len(assembly_sentences)}")
+        print(f"Audio Duration: {total_duration:.1f}s")
+        print("🌲 All videos used nature queries only")
+        if links:
+            print("Links:", links)
         
     else:
-        raise Exception("Error en la generación de audio")
+        raise Exception("Visual processing failed")
 
 except Exception as e:
     error_msg = f"❌ Error: {str(e)}"
@@ -1376,7 +1233,6 @@ except Exception as e:
     raise
 
 finally:
-    # Cleanup
     if TEMP_DIR.exists():
         shutil.rmtree(TEMP_DIR, ignore_errors=True)
     for f in ["visual.mp4", "list.txt"]:
@@ -1386,4 +1242,4 @@ finally:
             except:
                 pass
 
-print("\n✅ COMPLETO")
+print("\n✅ COMPLETE")
