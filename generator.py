@@ -438,7 +438,7 @@ SUBTITLE_STYLES = {
 }
 
 def create_ass_file(sentences, ass_file):
-    """Create ASS subtitle file"""
+    """Create ASS subtitle file with proper format"""
     style_key = random.choice(list(SUBTITLE_STYLES.keys()))
     style = SUBTITLE_STYLES[style_key]
     
@@ -448,7 +448,9 @@ def create_ass_file(sentences, ass_file):
         f.write("[Script Info]\n")
         f.write("ScriptType: v4.00+\n")
         f.write("PlayResX: 1920\n")
-        f.write("PlayResY: 1080\n\n")
+        f.write("PlayResY: 1080\n")
+        f.write("WrapStyle: 2\n")
+        f.write("ScaledBorderAndShadow: yes\n\n")
         
         f.write("[V4+ Styles]\n")
         f.write("Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n")
@@ -461,26 +463,39 @@ def create_ass_file(sentences, ass_file):
         for s in sentences:
             start_time = format_ass_time(s['start'])
             end_time = format_ass_time(s['end'])
-            text = s['text'].strip().replace('\\', '\\\\')
             
+            text = s['text'].strip()
+            text = text.replace('\\', '\\\\').replace('\n', ' ')
+            
+            if text.endswith('.'):
+                text = text[:-1]
+            if text.endswith(','):
+                text = text[:-1]
+            
+            if "mrbeast" in style_key or "hormozi" in style_key:
+                text = text.upper()
+            
+            MAX_CHARS = 35
             words = text.split()
             lines = []
             current_line = []
             current_length = 0
             
             for word in words:
-                if current_length + len(word) + 1 > 35 and current_line:
+                word_length = len(word) + 1
+                if current_length + word_length > MAX_CHARS and current_line:
                     lines.append(' '.join(current_line))
                     current_line = [word]
-                    current_length = len(word)
+                    current_length = word_length
                 else:
                     current_line.append(word)
-                    current_length += len(word) + 1
+                    current_length += word_length
             
             if current_line:
                 lines.append(' '.join(current_line))
             
             formatted_text = '\\N'.join(lines)
+            
             f.write(f"Dialogue: 0,{start_time},{end_time},Default,,0,0,0,,{formatted_text}\n")
 
 def format_ass_time(seconds):
@@ -490,6 +505,7 @@ def format_ass_time(seconds):
     s = int(seconds % 60)
     cs = int((seconds % 1) * 100)
     return f"{h}:{m:02d}:{s:02d}.{cs:02d}"
+
 
 # ========================================== 
 # 9. VIDEO SEARCH (NATURE ONLY - NO T5)
@@ -1062,22 +1078,71 @@ try:
     
     # Generate Chatterbox TTS audio
     update_status(20, "🎙️ Generating Spanish TTS with Chatterbox (language_id='es')...")
-    audio_file = TEMP_DIR / "audio.wav"
+ update_status(20, "Audio Synthesis...")
+audio_out = TEMP_DIR / "audio.wav"
+
+if clone_voice(text, ref_voice, audio_out):
+    update_status(50, "Creating Subtitles...")
     
-    # Use voice reference if available for voice cloning
-    if ref_voice and os.path.exists(ref_voice):
-        generate_tts_audio_chatterbox(sentences, audio_file, audio_prompt_path=str(ref_voice))
+    # Transcribe
+    if ASSEMBLY_KEY:
+        try:
+            aai.settings.api_key = ASSEMBLY_KEY
+            transcriber = aai.Transcriber()
+            transcript = transcriber.transcribe(str(audio_out))
+            
+            sentences = []
+            for sentence in transcript.get_sentences():
+                sentences.append({
+                    "text": sentence.text,
+                    "start": sentence.start / 1000,
+                    "end": sentence.end / 1000
+                })
+            if sentences:
+                sentences[-1]['end'] += 1.0
+        except:
+            # Fallback timing
+            words = text.split()
+            import wave
+            with wave.open(str(audio_out), 'rb') as wav:
+                total_dur = wav.getnframes() / float(wav.getframerate())
+            
+            words_per_sec = len(words) / total_dur
+            sentences = []
+            current_time = 0
+            
+            for i in range(0, len(words), 12):
+                chunk = words[i:i+12]
+                dur = len(chunk) / words_per_sec
+                sentences.append({
+                    "text": ' '.join(chunk),
+                    "start": current_time,
+                    "end": current_time + dur
+                })
+                current_time += dur
     else:
-        generate_tts_audio_chatterbox(sentences, audio_file)
-    
-    if not os.path.exists(audio_file):
-        raise Exception("Audio generation failed")
-    
-    print(f"✅ Audio: {os.path.getsize(audio_file)} bytes")
+        # Fallback
+        words = text.split()
+        import wave
+        with wave.open(str(audio_out), 'rb') as wav:
+            total_dur = wav.getnframes() / float(wav.getframerate())
+        
+        words_per_sec = len(words) / total_dur
+        sentences = []
+        current_time = 0
+        
+        for i in range(0, len(words), 12):
+            chunk = words[i:i+12]
+            dur = len(chunk) / words_per_sec
+            sentences.append({
+                "text": ' '.join(chunk),
+                "start": current_time,
+                "end": current_time + dur
+            })
+            current_time += dur
     
     # Create subtitles
-    update_status(30, "Creating Spanish subtitles...")
-    ass_file = TEMP_DIR / "subtitles.ass"
+    ass_file = TEMP_DIR / "subs.ass"
     create_ass_file(sentences, ass_file)
     
     # Process visuals with nature queries only
