@@ -4,7 +4,7 @@ AI VIDEO GENERATOR - SPANISH VERSION (NATURE ONLY - FIXED)
 ✅ Chatterbox Multilingual TTS for Spanish audio (language_id="es")
 ✅ ONLY nature queries - NO T5, NO translation, NO topic-based queries
 ✅ Pure natural greenery scenes
-✅ FIXED: Concatenation issues with robust fallback
+✅ FIXED: All indentation and concatenation issues
 """
 
 import os
@@ -472,9 +472,6 @@ def create_ass_file(sentences, ass_file):
             if text.endswith(','):
                 text = text[:-1]
             
-            if "mrbeast" in style_key or "hormozi" in style_key:
-                text = text.upper()
-            
             MAX_CHARS = 35
             words = text.split()
             lines = []
@@ -761,7 +758,7 @@ def process_visuals(sentences, audio_path, ass_file, logo_path, output_no_subs, 
     print(f"✅ Valid clips: {len(valid_clips)}/{len(sentences)}")
     
     # ========================================
-    # FIXED CONCATENATION - COPIED FROM GLOBAL SCRIPT
+    # FIXED CONCATENATION
     # ========================================
     print("⚡ Concatenating clips...")
     list_file = Path("list.txt")
@@ -832,7 +829,7 @@ def process_visuals(sentences, audio_path, ass_file, logo_path, output_no_subs, 
     
     print(f"✅ Concatenation complete: {file_size / (1024*1024):.1f}MB")
     
-    # === REST OF THE FUNCTION CONTINUES (VERSION 1 & 2 RENDERING) ===
+    # === VERSION 1 & 2 RENDERING ===
     print("📹 Creating final videos...")
     
     ass_path = str(ass_file.absolute()).replace("\\", "/").replace(":", "\\\\:")
@@ -1078,111 +1075,56 @@ try:
     
     # Generate Chatterbox TTS audio
     update_status(20, "🎙️ Generating Spanish TTS with Chatterbox (language_id='es')...")
-
-        audio_out = TEMP_DIR / "audio.wav"
- 
-    if clone_voice(text, ref_voice, audio_out):
-    update_status(50, "Creating Subtitles...")
     
-    # Transcribe
-    if ASSEMBLY_KEY:
-        try:
-            aai.settings.api_key = ASSEMBLY_KEY
-            transcriber = aai.Transcriber()
-            transcript = transcriber.transcribe(str(audio_out))
+    audio_file = TEMP_DIR / "audio.wav"
+    
+    if generate_tts_audio_chatterbox(sentences, audio_file, ref_voice):
+        update_status(50, "Creating Subtitles...")
+        
+        # Create subtitles
+        ass_file = TEMP_DIR / "subs.ass"
+        create_ass_file(sentences, ass_file)
+        
+        # Process visuals with nature queries only
+        update_status(55, "🌲 Processing nature visuals (ignoring text content)...")
+        output_no_subs = OUTPUT_DIR / f"spanish_{JOB_ID}_no_subs.mp4"
+        output_with_subs = OUTPUT_DIR / f"spanish_{JOB_ID}_with_subs.mp4"
+        
+        if process_visuals(sentences, audio_file, ass_file, ref_logo, output_no_subs, output_with_subs):
             
-            sentences = []
-            for sentence in transcript.get_sentences():
-                sentences.append({
-                    "text": sentence.text,
-                    "start": sentence.start / 1000,
-                    "end": sentence.end / 1000
-                })
-            if sentences:
-                sentences[-1]['end'] += 1.0
-        except:
-            # Fallback timing
-            words = text.split()
-            import wave
-            with wave.open(str(audio_out), 'rb') as wav:
-                total_dur = wav.getnframes() / float(wav.getframerate())
+            # Upload to Google Drive
+            update_status(95, "☁️ Uploading to Google Drive...")
             
-            words_per_sec = len(words) / total_dur
-            sentences = []
-            current_time = 0
+            links = {}
+            if os.path.exists(output_no_subs):
+                links['no_subs'] = upload_to_google_drive(output_no_subs)
+            if os.path.exists(output_with_subs):
+                links['with_subs'] = upload_to_google_drive(output_with_subs)
             
-            for i in range(0, len(words), 12):
-                chunk = words[i:i+12]
-                dur = len(chunk) / words_per_sec
-                sentences.append({
-                    "text": ' '.join(chunk),
-                    "start": current_time,
-                    "end": current_time + dur
-                })
-                current_time += dur
+            # Final status
+            final_msg = "✅ Spanish Nature Video Complete!\n"
+            final_msg += "🎙️ Chatterbox Spanish TTS (language_id='es')\n"
+            final_msg += "🌲 Pure Nature Videos (No Humans)\n"
+            final_msg += "🚫 NO T5/Translation Used\n"
+            if links.get('no_subs'):
+                final_msg += f"📹 No Subs: {links['no_subs']}\n"
+            if links.get('with_subs'):
+                final_msg += f"📹 With Subs: {links['with_subs']}"
+            
+            update_status(100, final_msg, "completed", links.get('no_subs') or links.get('with_subs'))
+            
+            print("\n🎉 SUCCESS!")
+            print(f"Script: {len(script_text)} chars")
+            print(f"Sentences: {len(sentences)}")
+            print(f"Duration: {total_duration:.1f}s")
+            print("🌲 All videos used nature queries only")
+            if links:
+                print("Links:", links)
+            
+        else:
+            raise Exception("Visual processing failed")
     else:
-        # Fallback
-        words = text.split()
-        import wave
-        with wave.open(str(audio_out), 'rb') as wav:
-            total_dur = wav.getnframes() / float(wav.getframerate())
-        
-        words_per_sec = len(words) / total_dur
-        sentences = []
-        current_time = 0
-        
-        for i in range(0, len(words), 12):
-            chunk = words[i:i+12]
-            dur = len(chunk) / words_per_sec
-            sentences.append({
-                "text": ' '.join(chunk),
-                "start": current_time,
-                "end": current_time + dur
-            })
-            current_time += dur
-    
-    # Create subtitles
-    ass_file = TEMP_DIR / "subs.ass"
-    create_ass_file(sentences, ass_file)
-    
-    # Process visuals with nature queries only
-    update_status(40, "🌲 Processing nature visuals (ignoring text content)...")
-    output_no_subs = OUTPUT_DIR / f"spanish_{JOB_ID}_no_subs.mp4"
-    output_with_subs = OUTPUT_DIR / f"spanish_{JOB_ID}_with_subs.mp4"
-    
-    if process_visuals(sentences, audio_file, ass_file, ref_logo, output_no_subs, output_with_subs):
-        
-        # Upload to Google Drive
-        update_status(95, "☁️ Uploading to Google Drive...")
-        
-        links = {}
-        if os.path.exists(output_no_subs):
-            links['no_subs'] = upload_to_google_drive(output_no_subs)
-        if os.path.exists(output_with_subs):
-            links['with_subs'] = upload_to_google_drive(output_with_subs)
-        
-        # Final status
-        final_msg = "✅ Spanish Nature Video Complete!\n"
-        final_msg += "🎙️ Chatterbox Spanish TTS (language_id='es')\n"
-        final_msg += "🌲 Pure Nature Videos (No Humans)\n"
-        final_msg += "🚫 NO T5/Translation Used\n"
-        if links.get('no_subs'):
-            final_msg += f"📹 No Subs: {links['no_subs']}\n"
-        if links.get('with_subs'):
-            final_msg += f"📹 With Subs: {links['with_subs']}"
-        
-        update_status(100, final_msg, "completed", links.get('no_subs') or links.get('with_subs'))
-        
-        print("\n🎉 SUCCESS!")
-        print(f"Script: {len(script_text)} chars")
-        print(f"Sentences: {len(sentences)}")
-        print(f"Duration: {total_duration:.1f}s")
-        print("🌲 All videos used nature queries only")
-        if links:
-            print("Links:", links)
-        
-    else:
-        raise Exception("Visual processing failed")
+        raise Exception("Audio generation failed")
 
 except Exception as e:
     error_msg = f"❌ Error: {str(e)}"
