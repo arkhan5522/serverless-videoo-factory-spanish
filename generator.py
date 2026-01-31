@@ -1,11 +1,12 @@
 """
-AI VIDEO GENERATOR - SPANISH VERSION WITH ASSEMBLY AI (NATURE ONLY - FIXED)
+AI VIDEO GENERATOR - SPANISH VERSION WITH ASSEMBLY AI (NATURE ONLY - FIXED TTS)
 ============================================
 ✅ Chatterbox Multilingual TTS for Spanish audio (language_id="es")
 ✅ Assembly AI for accurate subtitle timing
 ✅ ONLY nature queries - NO T5, NO translation, NO topic-based queries
 ✅ Pure natural greenery scenes
 ✅ FIXED: Concatenation issues with robust fallback
+✅ FIXED: TTS error handling with per-segment recovery
 """
 
 import os
@@ -305,50 +306,105 @@ def call_gemini(prompt):
     return "Error en la generación del guión."
 
 # ========================================== 
-# 7. CHATTERBOX TTS AUDIO GENERATION
+# 7. TEXT CLEANING FOR TTS
+# ========================================== 
+
+def clean_spanish_text(text):
+    """Clean text that might cause TTS issues"""
+    # Remove problematic characters but keep Spanish characters
+    text = re.sub(r'[^\w\s\.,;:¿?¡!\-áéíóúñÁÉÍÓÚÑüÜ]', '', text)
+    # Remove extra spaces
+    text = re.sub(r'\s+', ' ', text).strip()
+    # Ensure not empty
+    if not text or len(text) < 2:
+        return "Silencio."
+    return text
+
+# ========================================== 
+# 8. CHATTERBOX TTS AUDIO GENERATION (FIXED)
 # ========================================== 
 
 def generate_tts_audio_chatterbox(sentences, output_path, audio_prompt_path=None):
-    """Generate Spanish TTS audio using Chatterbox"""
+    """
+    Generate Spanish TTS audio using Chatterbox with robust error handling
+    FIXED: Per-segment error recovery, memory management, graceful fallback
+    """
     if not TTS_AVAILABLE or TTS_MODEL is None:
         print("⚠️ Chatterbox TTS not available, creating silent audio")
         return create_silent_audio(sentences, output_path)
     
     print("🎙️ Generating Spanish Audio with Chatterbox TTS (language_id='es')...")
     
+    # Clear CUDA cache if available
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        print("🧹 Cleared GPU cache before TTS generation")
+    
     try:
         all_audio_segments = []
+        failed_segments = []
+        sample_rate = 24000  # Default
         
-        for i, sent in enumerate(sentences):
-            text = sent['text'].strip()
+        BATCH_SIZE = 50  # Process in batches to manage memory
+        
+        for batch_start in range(0, len(sentences), BATCH_SIZE):
+            batch_end = min(batch_start + BATCH_SIZE, len(sentences))
+            batch = sentences[batch_start:batch_end]
             
-            if audio_prompt_path and os.path.exists(audio_prompt_path):
-                wav_audio = TTS_MODEL.generate(
-                    text, 
-                    language_id="es",
-                    audio_prompt_path=audio_prompt_path
-                )
-            else:
-                wav_audio = TTS_MODEL.generate(text, language_id="es")
+            # Clear cache between batches
+            if torch.cuda.is_available() and batch_start > 0:
+                torch.cuda.empty_cache()
+                print(f"🧹 Cleared GPU cache (batch {batch_start//BATCH_SIZE + 1})")
             
-            sample_rate = TTS_MODEL.sr
-            
-            if i == 0:
-                print(f"    🔍 Model sample rate: {sample_rate} Hz")
-            
-            silence_samples = int(0.2 * sample_rate)
-            silence = torch.zeros((wav_audio.shape[0] if wav_audio.dim() > 1 else 1, silence_samples))
-            
-            if wav_audio.dim() == 1:
-                wav_audio = wav_audio.unsqueeze(0)
-            
-            segment_with_pause = torch.cat([wav_audio, silence], dim=-1)
-            all_audio_segments.append(segment_with_pause)
-            
-            if (i + 1) % 10 == 0:
-                print(f"    ✅ Generated {i+1}/{len(sentences)} audio segments")
+            for i_local, sent in enumerate(batch):
+                i = batch_start + i_local
+                text = clean_spanish_text(sent['text'].strip())
+                
+                try:
+                    # Try to generate audio for this segment
+                    if audio_prompt_path and os.path.exists(audio_prompt_path):
+                        wav_audio = TTS_MODEL.generate(
+                            text, 
+                            language_id="es",
+                            audio_prompt_path=audio_prompt_path
+                        )
+                    else:
+                        wav_audio = TTS_MODEL.generate(text, language_id="es")
+                    
+                    sample_rate = TTS_MODEL.sr
+                    
+                    if i == 0:
+                        print(f"    🔍 Model sample rate: {sample_rate} Hz")
+                    
+                    # Add pause between segments
+                    silence_samples = int(0.2 * sample_rate)
+                    silence = torch.zeros((wav_audio.shape[0] if wav_audio.dim() > 1 else 1, silence_samples))
+                    
+                    if wav_audio.dim() == 1:
+                        wav_audio = wav_audio.unsqueeze(0)
+                    
+                    segment_with_pause = torch.cat([wav_audio, silence], dim=-1)
+                    all_audio_segments.append(segment_with_pause)
+                    
+                except Exception as segment_error:
+                    # Log the error but continue with silence for this segment
+                    print(f"    ⚠️ Segment {i+1} TTS failed: {str(segment_error)[:60]}")
+                    failed_segments.append(i)
+                    
+                    # Create silence for failed segment
+                    duration = max(3.0, sent['end'] - sent['start'])
+                    silence_samples = int(duration * sample_rate)
+                    silence = torch.zeros((1, silence_samples))
+                    all_audio_segments.append(silence)
+                
+                if (i + 1) % 10 == 0:
+                    print(f"    ✅ Generated {i+1}/{len(sentences)} audio segments")
+        
+        if failed_segments:
+            print(f"    ⚠️ {len(failed_segments)}/{len(sentences)} segments failed, used silence")
         
         if all_audio_segments:
+            # Ensure all segments have same number of channels
             max_channels = max(seg.shape[0] if seg.dim() > 1 else 1 for seg in all_audio_segments)
             
             processed_segments = []
@@ -359,11 +415,14 @@ def generate_tts_audio_chatterbox(sentences, output_path, audio_prompt_path=None
                     seg = seg.repeat(max_channels, 1)
                 processed_segments.append(seg)
             
+            # Concatenate all segments
             full_audio = torch.cat(processed_segments, dim=-1)
             
+            # Save to temporary file
             temp_path = str(output_path).replace('.wav', '_temp.wav')
             ta.save(temp_path, full_audio, sample_rate)
             
+            # Convert to standard format with ffmpeg
             subprocess.run([
                 "ffmpeg", "-y",
                 "-i", temp_path,
@@ -373,22 +432,25 @@ def generate_tts_audio_chatterbox(sentences, output_path, audio_prompt_path=None
                 str(output_path)
             ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
             
+            # Clean up temp file
             try:
                 os.remove(temp_path)
             except:
                 pass
             
-            import wave
+            # Verify output
             with wave.open(str(output_path), 'rb') as wav_file:
                 final_duration = wav_file.getnframes() / wav_file.getframerate()
-                print(f"✅ Spanish TTS audio: {final_duration:.1f}s")
+                print(f"✅ Spanish TTS audio: {final_duration:.1f}s ({len(failed_segments)} segments used silence)")
             
             return True
         else:
+            print("⚠️ No audio segments generated, using silent audio")
             return create_silent_audio(sentences, output_path)
         
     except Exception as e:
-        print(f"❌ TTS failed: {e}")
+        print(f"❌ TTS generation failed completely: {e}")
+        print("Creating silent audio as fallback...")
         return create_silent_audio(sentences, output_path)
 
 def create_silent_audio(sentences, output_path):
@@ -406,7 +468,7 @@ def create_silent_audio(sentences, output_path):
     return True
 
 # ========================================== 
-# 8. ASSEMBLY AI SUBTITLE SYSTEM
+# 9. ASSEMBLY AI SUBTITLE SYSTEM
 # ========================================== 
 
 SUBTITLE_STYLES = {
@@ -551,7 +613,7 @@ def format_ass_time(seconds):
     return f"{h}:{m:02d}:{s:02d}.{cs:02d}"
 
 # ========================================== 
-# 9. VIDEO SEARCH (NATURE ONLY - NO T5)
+# 10. VIDEO SEARCH (NATURE ONLY - NO T5)
 # ========================================== 
 
 USED_VIDEO_URLS = set()
@@ -804,7 +866,7 @@ def process_visuals(sentences, audio_path, ass_file, logo_path, output_no_subs, 
     print(f"✅ Valid clips: {len(valid_clips)}/{len(sentences)}")
     
     # ========================================
-    # FIXED CONCATENATION - COPIED FROM GLOBAL SCRIPT
+    # FIXED CONCATENATION - ROBUST PATH HANDLING
     # ========================================
     print("⚡ Concatenating clips...")
     list_file = Path("list.txt")
@@ -1058,11 +1120,12 @@ def upload_to_google_drive(file_path):
 # ========================================== 
 
 print("\n" + "="*60)
-print("🎬 SPANISH VIDEO GENERATOR - NATURE ONLY WITH ASSEMBLY AI")
+print("🎬 SPANISH VIDEO GENERATOR - FIXED TTS ERROR HANDLING")
 print("✅ Chatterbox Multilingual TTS (language_id='es')")
 print("🔍 Assembly AI for accurate Spanish subtitles")
 print("🌲 Pure Nature Videos (No Humans, No Beaches)")
 print("🚫 NO T5, NO Translation - Direct Nature Queries")
+print("🛡️  ROBUST: Per-segment error recovery + memory management")
 print("="*60)
 
 try:
@@ -1120,7 +1183,7 @@ try:
     
     print(f"📊 Sentences for audio: {len(temp_sentences)}")
     
-    # Generate Chatterbox TTS audio
+    # Generate Chatterbox TTS audio with FIXED error handling
     update_status(20, "🎙️ Generating Spanish TTS with Chatterbox (language_id='es')...")
     audio_file = TEMP_DIR / "audio.wav"
     
@@ -1136,7 +1199,7 @@ try:
     print(f"✅ Audio: {os.path.getsize(audio_file)} bytes")
     
     # ==========================================
-    # ASSEMBLY AI SECTION - EXTRACTED FROM ENGLISH SCRIPT
+    # ASSEMBLY AI SECTION
     # ==========================================
     update_status(30, "🔍 Transcribing audio with Assembly AI for accurate Spanish subtitles...")
     
@@ -1206,6 +1269,7 @@ try:
         final_msg += "🔍 Assembly AI for accurate Spanish subtitles\n"
         final_msg += "🌲 Pure Nature Videos (No Humans)\n"
         final_msg += "🚫 NO T5/Translation Used\n"
+        final_msg += "🛡️  Robust TTS with error recovery\n"
         if links.get('no_subs'):
             final_msg += f"📹 No Subs: {links['no_subs']}\n"
         if links.get('with_subs'):
@@ -1233,6 +1297,11 @@ except Exception as e:
     raise
 
 finally:
+    # Final cleanup
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        print("🧹 Final GPU cache cleanup")
+    
     if TEMP_DIR.exists():
         shutil.rmtree(TEMP_DIR, ignore_errors=True)
     for f in ["visual.mp4", "list.txt"]:
