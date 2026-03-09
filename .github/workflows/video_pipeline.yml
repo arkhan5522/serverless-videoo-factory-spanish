@@ -114,10 +114,10 @@ jobs:
           # Combine the header (secrets) with the main script
           cat config_header.py final_script.py > temp.py && mv temp.py final_script.py
 
-          # 4. Create Kaggle Metadata - RENAMED TO DISGUISE WORKLOAD
+          # 4. Create Kaggle Metadata
           echo '{
-            "id": "'"$KAGGLE_USERNAME"'/neural-audio-processing",
-            "title": "Neural Audio Processing",
+            "id": "'"$KAGGLE_USERNAME"'/video-factory-titan",
+            "title": "Video Factory Titan",
             "code_file": "final_script.py",
             "language": "python",
             "kernel_type": "script",
@@ -136,8 +136,7 @@ jobs:
         run: |
           echo "Polling Kaggle (Timeout: 6 Hours)..."
           for i in {1..360}; do
-            # UPDATED POLLING ID TO MATCH NEW METADATA
-            OUTPUT=$(kaggle kernels status ${{ secrets.KAGGLE_USERNAME }}/neural-audio-processing)
+            OUTPUT=$(kaggle kernels status ${{ secrets.KAGGLE_USERNAME }}/video-factory-titan)
             echo "$OUTPUT"
             
             if [[ "$OUTPUT" == *"complete"* ]]; then
@@ -155,8 +154,7 @@ jobs:
       - name: Download Output
         continue-on-error: true
         run: |
-          # UPDATED DOWNLOAD ID TO MATCH NEW METADATA AND FIX PREVIOUS BUG
-          kaggle kernels output ${{ secrets.KAGGLE_USERNAME }}/neural-audio-processing -p ./output
+          kaggle kernels output ${{ secrets.KAGGLE_USERNAME }}/video-factory-titan-spanish -p ./output
           mkdir public_video
           mv ./output/final_video_*.mp4 ./public_video/ || echo "Video likely uploaded to Google Drive directly."
 
