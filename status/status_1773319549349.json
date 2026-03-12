@@ -1,1 +1,1 @@
-{"progress": 10, "message": "Generating Spanish script...", "status": "processing", "logs": "[12:51:10] Initializing...\n[12:51:13] Generating Spanish script...", "timestamp": 1773319873.8386593}
+{"progress": 20, "message": "\ud83c\udf99\ufe0f Generating Spanish TTS with Chatterbox (language_id='es')...", "status": "processing", "logs": "[12:51:10] Initializing...\n[12:51:13] Generating Spanish script...\n[12:51:15] Processing sentences for audio...\n[12:51:15] \ud83c\udf99\ufe0f Generating Spanish TTS with Chatterbox (language_id='es')...", "timestamp": 1773319875.98164}
